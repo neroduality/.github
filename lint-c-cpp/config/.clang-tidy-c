@@ -1,0 +1,138 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright (C) 2026 Nero Duality, LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Overlay model + naming sources: config/README.md
+
+Checks: >
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  bugprone-*,
+  cert-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  google-build-namespaces,
+  google-build-using-namespace,
+  google-global-names-in-headers,
+  google-readability-braces-around-statements,
+  google-readability-function-size,
+  google-readability-todo,
+  misc-misleading-bidirectional,
+  misc-confusable-identifiers,
+  misc-misleading-identifier,
+  -modernize-use-trailing-return-type,
+  -modernize-use-std-print,
+  -readability-identifier-length,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-suspicious-include,
+  -readability-uppercase-literal-suffix,
+  -modernize-avoid-c-arrays,
+  -modernize-deprecated-headers,
+  -modernize-macro-to-enum,
+  -modernize-redundant-void-arg,
+  -modernize-use-using,
+  -performance-enum-size,
+  -readability-use-concise-preprocessor-directives,
+  -readability-function-cognitive-complexity,
+  -readability-implicit-bool-conversion,
+  -readability-simplify-boolean-expr,
+  -modernize-use-nullptr,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-valist.Uninitialized,
+  -clang-diagnostic-format-nonliteral,
+  -bugprone-not-null-terminated-result,
+  -bugprone-unsafe-functions,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-no-malloc,
+  -cppcoreguidelines-avoid-goto,
+  -cppcoreguidelines-init-variables,
+  -cppcoreguidelines-pro-type-member-init,
+  -cppcoreguidelines-use-enum-class,
+  -cppcoreguidelines-macro-to-enum,
+  -cppcoreguidelines-macro-usage,
+  -cert-err33-c,
+  -concurrency-mt-unsafe,
+  -portability-avoid-pragma-once
+
+WarningsAsErrors: '*'
+
+HeaderFilterRegex: ".*"
+
+CheckOptions:
+  - key: bugprone-unsafe-functions.ReportMoreUnsafeFunctions
+    value: 'false'
+  - key: bugprone-unsafe-functions.ReportDefaultFunctions
+    value: 'true'
+  - key: google-readability-braces-around-statements.ShortStatementLines
+    value: '1'
+  - key: readability-function-size.StatementThreshold
+    value: '800'
+  - key: readability-magic-numbers.IgnoredIntegerValues
+    value: '0;1'
+  - key: cppcoreguidelines-avoid-magic-numbers.IgnoredIntegerValues
+    value: '0;1'
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructIgnoredRegexp
+    value: '^[a-z][a-z0-9_]*_t$'
+  - key: readability-identifier-naming.UnionCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumIgnoredRegexp
+    value: '^[a-z][a-z0-9_]*_t$'
+  - key: readability-identifier-naming.EnumConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.TypedefCase
+    value: lower_case
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalFunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.StaticConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE

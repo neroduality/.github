@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright (C) 2026 Nero Duality, LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Minimum host lint tool versions for the org C/C++ lint kit.
+
+tools:
+  clang_format:
+    binaries:
+      - clang-format
+      - clang-format-20
+      - clang-format-21
+    min: "20.0.0"
+  clang_tidy:
+    binaries:
+      - clang-tidy
+      - clang-tidy-21
+    min: "21.0.0"
+  cmake:
+    min: "3.20"
+  codespell:
+    min: "2.4.2"
+  cppcheck:
+    min: "2.19.1"
+  markdownlint:
+    min: "0.48.0"
+  make:
+    min: "4.0"
+  node:
+    min: 20
+  python3:
+    min: "3.10"
+  shellcheck:
+    min: "0.9.0"
+  shfmt:
+    min: "3.0.0"
