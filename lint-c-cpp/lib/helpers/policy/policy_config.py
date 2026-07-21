@@ -55,6 +55,7 @@ class RaiiPair:
     hint: str
     acquire_rx: tuple[re.Pattern[str], ...]
     release_rx: tuple[re.Pattern[str], ...]
+    canonical_files: frozenset[Path]
 
 
 @dataclass(frozen=True)

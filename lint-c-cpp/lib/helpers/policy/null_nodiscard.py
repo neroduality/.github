@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from policy_config import K_CANONICAL_NULL, K_HEADER, NullPolicy, PolicyConfig
+from scan_policy import strip_comments_and_strings as strip_code
 
 LINT_TITLE = "null/nodiscard policy"
 LINT_FIX_HINT = "Use project NULL and NODISCARD macros."
@@ -46,6 +47,14 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
     "multiline_nodiscard_bad.h": (
         "#pragma once\nbool\nprobe_bad(void);\n",
         {"multiline_nodiscard_bad.h"},
+    ),
+    "trailing_bool_bad.h": (
+        "#pragma once\nauto probe_trailing(void) -> bool;\n",
+        {"trailing_bool_bad.h"},
+    ),
+    "trailing_bool_ok.h": (
+        "#pragma once\nSAMPLE_NODISCARD auto probe_trailing_ok(void) -> bool;\n",
+        set(),
     ),
     "raw_null.c": ("void f(void* p) { if (p == NULL) {} }\n", {"raw_null.c"}),
     "legacy_old_null.c": ("void f(void* p) { if (p == OLD_NULL) {} }\n", {"legacy_old_null.c"}),
@@ -71,6 +80,10 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
     "struct_field_ok.h": ("struct S { bool flag{}; };\n", set()),
     "static_internal_ok.h": ("static bool helper(void) { return false; }\n", set()),
     "comment_null.c": ("/* NULL is bad in code */ void f(void) {}\n", set()),
+    "multiline_comment_null.c": (
+        "/* canonical docs mention\n * nullptr and NULL here.\n */\nvoid f(void) {}\n",
+        set(),
+    ),
     "comment_nullptr.c": ("/* nullptr is bad in code */ void f(void) {}\n", set()),
     "comment_sample_null.c": ("/* SAMPLE_NULL is the canonical token. */ void f(void) {}\n", set()),
     "sample_null_define_ok.h": ("#define SAMPLE_NULL nullptr\n", {"sample_null_define_ok.h"}),
@@ -137,13 +150,20 @@ def has_nodiscard(decl: str, policy: NullPolicy) -> bool:
     return policy.nodiscard_macro in decl or "[[nodiscard]]" in decl
 
 
+def is_bool_function_decl(decl: str) -> bool:
+    return bool(
+        re.search(r"\bbool\s+\w+\s*\(", decl)
+        or re.search(r"\bauto\s+\w+\s*\([^;{}]*\)\s*->\s*bool\b", decl)
+    )
+
+
 def scan_nodiscard_header(path: Path, policy: NullPolicy) -> list[str]:
     issues: list[str] = []
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     for start_line, decl in merge_bool_decl_lines(lines, policy):
         if re.search(r"\bstatic\s+bool\s+\w+\s*\(", decl) and "inline" not in decl:
             continue
-        if not re.search(r"\bbool\s+\w+\s*\(", decl):
+        if not is_bool_function_decl(decl):
             continue
         if is_struct_or_field(decl):
             continue
@@ -158,10 +178,12 @@ def scan_nodiscard_header(path: Path, policy: NullPolicy) -> list[str]:
 
 def scan_null_tokens(path: Path, policy: NullPolicy, config: PolicyConfig) -> list[str]:
     issues: list[str] = []
-    for i, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    raw_lines = raw.splitlines()
+    code_lines = strip_code(raw).splitlines()
+    for i, (line, code) in enumerate(zip(raw_lines, code_lines), 1):
         if canonical_null_define_allowed(path, line, policy, config):
             continue
-        code = strip_comments_and_strings(line)
         if RAW_NULL.search(code):
             issues.append(f"{path}:{i}: raw NULL (use {policy.null_macro})")
         if LEGACY_NULL_TOKEN.search(code):
@@ -181,7 +203,7 @@ def scan_null_include(path: Path, policy: NullPolicy, config: PolicyConfig) -> l
     if config.has(path, K_CANONICAL_NULL):
         return []
     text = path.read_text(encoding="utf-8", errors="replace")
-    code = "\n".join(strip_comments_and_strings(line) for line in text.splitlines())
+    code = strip_code(text)
     if not policy.null_token.search(code):
         return []
     if has_null_include(text, policy):
@@ -197,10 +219,12 @@ def scan_null_include(path: Path, policy: NullPolicy, config: PolicyConfig) -> l
 
 def scan_standalone_nullptr(path: Path, policy: NullPolicy, config: PolicyConfig) -> list[str]:
     issues: list[str] = []
-    for i, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    raw_lines = raw.splitlines()
+    code_lines = strip_code(raw).splitlines()
+    for i, (line, code) in enumerate(zip(raw_lines, code_lines), 1):
         if canonical_null_define_allowed(path, line, policy, config):
             continue
-        code = strip_comments_and_strings(line)
         if STANDALONE_NULLPTR.search(code):
             issues.append(f"{path}:{i}: standalone nullptr (use {policy.null_macro})")
     return issues

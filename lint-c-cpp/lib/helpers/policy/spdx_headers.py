@@ -15,7 +15,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ensure source files carry the repository license header from the consumer manifest."""
+"""Ensure source files carry the full license_header corpus from the consumer manifest.
+
+The manifest ``license_header`` block is the sole corpus. Comment markers (``#`` /
+``//``) in that blob are stripped; the checker re-applies the style for each file
+kind and requires a contiguous exact match of every configured line — not merely
+an SPDX identifier.
+"""
 
 from __future__ import annotations
 
@@ -160,12 +166,17 @@ def _configured_lines(year: int) -> list[str]:
     return [line.format(year=year) for line in _LICENSE_LINES or []]
 
 
-def _prefixed_header_text(year: int, prefix: str) -> str:
-    rendered = []
+def _expected_comment_lines(year: int, prefix: str) -> list[str]:
+    """Full license_header corpus rendered as line comments (no trailing blanks)."""
+    rendered: list[str] = []
     for line in _configured_lines(year):
         rendered.append(prefix if line == "" else f"{prefix} {line}")
-    rendered.extend(["", ""])
-    return "\n".join(rendered)
+    return rendered
+
+
+def _prefixed_header_text(year: int, prefix: str) -> str:
+    # One blank line after the full corpus separates it from file body.
+    return "\n".join(_expected_comment_lines(year, prefix) + ["", ""])
 
 
 def hash_header_text(year: int) -> str:
@@ -176,6 +187,15 @@ def cpp_header_text(year: int) -> str:
     return _prefixed_header_text(year, "//")
 
 
+def _md_inner_lines(year: int) -> list[str]:
+    lines = _configured_lines(year)
+    if lines and lines[0].startswith("SPDX-License-Identifier:"):
+        lines = lines[1:]
+    while lines and lines[0] == "":
+        lines = lines[1:]
+    return lines
+
+
 def md_header_text(year: int) -> str:
     lines = _configured_lines(year)
     spdx = (
@@ -183,10 +203,7 @@ def md_header_text(year: int) -> str:
         if lines and lines[0].startswith("SPDX-License-Identifier:")
         else (_SPDX_LINE or "")
     )
-    inner_lines = lines[1:] if lines and lines[0].startswith("SPDX-License-Identifier:") else lines
-    while inner_lines and inner_lines[0] == "":
-        inner_lines = inner_lines[1:]
-    inner = "\n".join(inner_lines)
+    inner = "\n".join(_md_inner_lines(year))
     return f"<!-- {spdx} -->\n<!--\n{inner}\n-->\n\n"
 
 
@@ -215,38 +232,14 @@ def _strip_comment_content(ln: str, prefix: str) -> str | None:
     return stripped[3:] if stripped.startswith("// ") else stripped[2:]
 
 
-def _line_present(line: str, text: str) -> bool:
-    if line in text:
-        return True
-    stripped = line.strip()
-    return bool(stripped and stripped in text)
-
-
-def _markers_ok(text: str, *, require_spdx: bool = True, skip_spdx: bool = False) -> bool:
-    _require_configured()
-    year_match = re.search(r"Copyright \(C\)\s+(\d{4})", text)
-    year = int(year_match.group(1)) if year_match else _year()
-    for line in _configured_lines(year):
-        if not line.strip():
-            continue
-        if skip_spdx and line.startswith("SPDX-License-Identifier:"):
-            continue
-        if not _line_present(line, text):
-            return False
-    if require_spdx and _SPDX_LINE and _SPDX_LINE not in text:
-        return False
-    return True
-
-
-def _markers_ok_md_inner(text: str) -> bool:
-    return _markers_ok(text, require_spdx=False, skip_spdx=True)
-
-
-def _markers_ok_plain(text: str) -> bool:
-    return _markers_ok(text)
+def _md_inner_matches_corpus(inner: str, year: int) -> bool:
+    """Markdown body comment must be the full configured corpus (minus SPDX line)."""
+    expected = "\n".join(_md_inner_lines(year))
+    return inner.strip("\n") == expected
 
 
 def _is_license_inner(inner: str) -> bool:
+    """True when a comment line still looks like part of a (possibly broken) header."""
     _require_configured()
     s = inner.strip()
     if s == "":
@@ -265,26 +258,10 @@ def _is_license_inner(inner: str) -> bool:
     return False
 
 
-def _last_line_in_raw(raw: str, year: int) -> bool:
-    if not _LAST_LINE:
-        return False
-    formatted = _LAST_LINE.format(year=year)
-    return formatted in raw or _LAST_LINE in raw
-
-
-def _comment_inner_ok(block: list[str], prefix: str) -> bool:
-    parts: list[str] = []
-    for ln in block:
-        inner = _strip_comment_content(ln, prefix)
-        if inner is None:
-            return False
-        parts.append(inner)
-    return _markers_ok_plain("\n".join(parts))
-
-
 def _scan_comment_license_extent(
-    lines: list[str], spdx_idx: int, prefix: str, year: int
-) -> tuple[int, bool]:
+    lines: list[str], spdx_idx: int, prefix: str
+) -> int:
+    """End index of a SPDX-started line-comment run (for replacement)."""
     k = spdx_idx
     while k < len(lines):
         raw = lines[k]
@@ -298,15 +275,10 @@ def _scan_comment_license_extent(
             if not raw.lstrip().startswith("//"):
                 break
             inner = _strip_comment_content(raw, prefix)
-        if inner is None:
+        if inner is None or not _is_license_inner(inner):
             break
-        if _last_line_in_raw(raw, year):
-            return k + 1, True
-        if _is_license_inner(inner):
-            k += 1
-            continue
-        break
-    return k, False
+        k += 1
+    return k
 
 
 def _repair_line_comment(
@@ -322,6 +294,7 @@ def _repair_line_comment(
     while i < len(lines) and lines[i].strip() == "":
         i += 1
 
+    expected = _expected_comment_lines(year, prefix)
     spdx_idx = None
     for j in range(i, min(len(lines), i + 40)):
         line = lines[j]
@@ -337,9 +310,10 @@ def _repair_line_comment(
     if spdx_idx is None:
         merged = out_prefix + header_lines + lines[i:]
     else:
-        end_exclusive, complete = _scan_comment_license_extent(lines, spdx_idx, prefix, year)
-        if complete and _comment_inner_ok(lines[spdx_idx:end_exclusive], prefix):
+        # Require the contiguous block to equal the entire license_header corpus.
+        if lines[spdx_idx : spdx_idx + len(expected)] == expected:
             return content, False
+        end_exclusive = _scan_comment_license_extent(lines, spdx_idx, prefix)
         merged = out_prefix + header_lines + lines[end_exclusive:]
 
     text = "\n".join(merged)
@@ -363,7 +337,7 @@ def repair_md(content: str, year: int) -> tuple[str, bool]:
     body = content[len(bom) :]
 
     m = _md_header_rx().match(body)
-    if m is not None and _markers_ok_md_inner(m.group(1)):
+    if m is not None and _md_inner_matches_corpus(m.group(1), year):
         return content, False
 
     fresh = md_header_text(year)
@@ -432,14 +406,14 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
             changed_count += 1
     if args.check and changed_count > 0:
         print(
-            f"error: {changed_count} file(s) missing or incomplete SPDX header "
+            f"error: {changed_count} file(s) missing or incomplete license_header corpus "
             "(run without --check to fix)",
             file=sys.stderr,
         )
         return 1
     if args.fail_on_change and changed_count > 0:
         return fail_if_repaired(
-            detail=f"repaired SPDX headers in {changed_count} file(s)",
+            detail=f"repaired license_header corpus in {changed_count} file(s)",
             changed_count=changed_count,
         )
     print(formatter_ok_message("license headers", scanned, 0))
@@ -450,10 +424,14 @@ def run_self_test() -> int:
     _apply_license_blob(_SELF_TEST_LICENSE_BLOB)
     year = 2026
     failures: list[str] = []
+    expected_cpp = _expected_comment_lines(year, "//")
+    expected_hash = _expected_comment_lines(year, "#")
 
     repaired, changed = repair_hash("#!/usr/bin/env bash\necho ok\n", year)
     if not changed or not repaired.startswith("#!/usr/bin/env bash\n# SPDX-License-Identifier:"):
         failures.append("hash repair must preserve shebang and insert header")
+    if not all(line in repaired for line in expected_hash):
+        failures.append("hash repair must insert the full license_header corpus")
     same, changed = repair_hash(repaired, year)
     if changed or same != repaired:
         failures.append("hash repair must be idempotent")
@@ -461,13 +439,29 @@ def run_self_test() -> int:
     repaired_cpp, changed = repair_cpp("int main(void) { return 0; }\n", year)
     if not changed or not repaired_cpp.startswith("// SPDX-License-Identifier:"):
         failures.append("C/C++ repair must insert // header")
+    if repaired_cpp.splitlines()[: len(expected_cpp)] != expected_cpp:
+        failures.append("C/C++ repair must insert the full license_header corpus")
     _, changed = repair_cpp(repaired_cpp, year)
     if changed:
         failures.append("C/C++ repair must be idempotent")
 
+    spdx_only = "// SPDX-License-Identifier: Apache-2.0\n\nint x;\n"
+    fixed_spdx_only, changed = repair_cpp(spdx_only, year)
+    if not changed or fixed_spdx_only.splitlines()[: len(expected_cpp)] != expected_cpp:
+        failures.append("SPDX-only header must be rejected; full corpus required")
+
+    partial = "\n".join(expected_cpp[:3] + ["", "int x;"]) + "\n"
+    fixed_partial, changed = repair_cpp(partial, year)
+    if not changed or fixed_partial.splitlines()[: len(expected_cpp)] != expected_cpp:
+        failures.append("partial license_header corpus must be rejected")
+
     repaired_md, changed = repair_md("# Title\n", year)
     if not changed or not repaired_md.startswith("<!-- SPDX-License-Identifier: Apache-2.0 -->"):
         failures.append("Markdown repair must insert HTML-comment header")
+    for line in _md_inner_lines(year):
+        if line.strip() and line not in repaired_md:
+            failures.append("Markdown repair must insert the full license_header corpus")
+            break
     _, changed = repair_md(repaired_md, year)
     if changed:
         failures.append("Markdown repair must be idempotent")

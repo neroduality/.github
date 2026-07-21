@@ -265,22 +265,98 @@ def _declared_compile_db_kinds(repo_root: Path) -> list[tuple[str, str]]:
     return rows
 
 
-def owning_compile_commands_json(repo_root: Path, lookup_key: str) -> str | None:
+def compile_commands_jsons_containing_source(
+    repo_root: Path, lookup_key: str
+) -> list[str]:
+    """All declared ``compile_commands_json`` paths that list ``lookup_key``."""
+    repo_root = repo_root.resolve()
+    out: list[str] = []
+    for rel, _kind in _declared_compile_db_kinds(repo_root):
+        if _source_key_in_compile_db(repo_root, rel, lookup_key):
+            out.append(Path(rel).as_posix())
+    return out
+
+
+def compile_commands_jsons_covering_source(
+    repo_root: Path, lookup_key: str
+) -> list[str]:
+    """Declared databases containing a source or owning its manifest source root.
+
+    Headers normally receive synthesized compile entries and therefore are not
+    present in an original database. In that case every profile whose ``source``
+    root covers the header is its provenance for per-database policy.
+    """
+    exact = compile_commands_jsons_containing_source(repo_root, lookup_key)
+    if exact:
+        return exact
+    from consumer_manifest import compile_db_firmware_entries, compile_db_userspace_entries
+
+    out: list[str] = []
+    for entry in (*compile_db_firmware_entries(repo_root), *compile_db_userspace_entries(repo_root)):
+        source = Path(str(entry.get("source", "")).strip()).as_posix().strip("/")
+        if not source:
+            continue
+        if source == "." or lookup_key == source or lookup_key.startswith(f"{source}/"):
+            rel = Path(str(entry["compile_commands_json"])).as_posix()
+            if rel not in out:
+                out.append(rel)
+    return out
+
+
+def owning_compile_commands_json(
+    repo_root: Path,
+    lookup_key: str,
+    *,
+    preferred_compile_db: str | None = None,
+    provenance: list[str] | None = None,
+) -> str | None:
     """Owning manifest ``compile_commands_json`` for a source key (plan merge rule).
 
-    Paths under ``firmware_compile_source_roots`` prefer a firmware DB that lists the
-    key (even if a host/tests DB also compiled it). ``tests/firmware/…`` stays on the
+    When ``preferred_compile_db`` is set (per-profile audit), that DB wins if it
+    lists the source. When ``provenance`` lists DBs that contained the source,
+    overrides are resolved against a provenance member rather than an arbitrary
+    first match. Paths under ``firmware_compile_source_roots`` otherwise prefer a
+    firmware DB that lists the key. ``tests/firmware/…`` stays on the
     tests/userspace DB. Otherwise prefer a userspace DB that lists the key.
     """
     from consumer_manifest import firmware_compile_source_roots
 
     repo_root = repo_root.resolve()
+    if preferred_compile_db is not None:
+        preferred = Path(preferred_compile_db).as_posix()
+        if _source_key_in_compile_db(repo_root, preferred, lookup_key):
+            return preferred
     containing: list[tuple[str, str]] = []
     for rel, kind in _declared_compile_db_kinds(repo_root):
         if _source_key_in_compile_db(repo_root, rel, lookup_key):
             containing.append((Path(rel).as_posix(), kind))
     if not containing:
+        if provenance:
+            declared = {
+                Path(rel).as_posix() for rel, _kind in _declared_compile_db_kinds(repo_root)
+            }
+            for item in provenance:
+                candidate = Path(item).as_posix()
+                if candidate in declared:
+                    return candidate
         return None
+    if provenance:
+        prov = {Path(item).as_posix() for item in provenance if item}
+        for rel, _kind in containing:
+            if rel in prov:
+                # Prefer firmware provenance when the source is under firmware roots.
+                roots = firmware_compile_source_roots(repo_root)
+                prefer_firmware = any(
+                    lookup_key == root or lookup_key.startswith(f"{root}/") for root in roots
+                )
+                if prefer_firmware:
+                    for cand, kind in containing:
+                        if cand in prov and kind == "firmware":
+                            return cand
+                for cand, kind in containing:
+                    if cand in prov and kind == "userspace":
+                        return cand
+                return next(rel for rel, _ in containing if rel in prov)
     roots = firmware_compile_source_roots(repo_root)
     prefer_firmware = any(
         lookup_key == root or lookup_key.startswith(f"{root}/") for root in roots
@@ -300,11 +376,19 @@ def override_dials_for_source(
     repo_root: Path,
     config_key: str,
     lookup_key: str | None = None,
+    *,
+    preferred_compile_db: str | None = None,
+    provenance: list[str] | None = None,
 ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     """Global add/remove plus the ``by_compile_db`` entry for the owning compile DB."""
     owner = None
     if lookup_key is not None:
-        owner = owning_compile_commands_json(repo_root, lookup_key)
+        owner = owning_compile_commands_json(
+            repo_root,
+            lookup_key,
+            preferred_compile_db=preferred_compile_db,
+            provenance=provenance,
+        )
     return override_dials_for_compile_db(repo_root, config_key, owner)
 
 
@@ -334,9 +418,18 @@ def override_dials_for_compile_db(
 def openssf_override_dials_for_source(
     repo_root: Path,
     lookup_key: str | None = None,
+    *,
+    preferred_compile_db: str | None = None,
+    provenance: list[str] | None = None,
 ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     """Global + owning-DB ``openssf-hardening`` dials (firmware-prefer ownership)."""
-    return override_dials_for_source(repo_root, "openssf-hardening", lookup_key)
+    return override_dials_for_source(
+        repo_root,
+        "openssf-hardening",
+        lookup_key,
+        preferred_compile_db=preferred_compile_db,
+        provenance=provenance,
+    )
 
 
 def apply_openssf_coverage_flag_overrides(
@@ -345,7 +438,7 @@ def apply_openssf_coverage_flag_overrides(
     add: tuple[str, ...] | None,
     remove: tuple[str, ...] | None,
 ) -> dict[str, Any]:
-    """Return a deep-copied manifest with ``coverage.flags`` add/remove applied.
+    """Return a deep-copied manifest with coverage flag/definition dials applied.
 
     Audit / hardeninglint use this; dialed Hardening.cmake generate also filters emit
     lists to the same coverage set (build ground truth). Kit undialed cmake/ stays FULL.
@@ -362,13 +455,22 @@ def apply_openssf_coverage_flag_overrides(
     if not isinstance(flags, list):
         return out
     flag_strs = [str(item) for item in flags]
+    definitions = coverage.get("definitions")
+    definition_strs = (
+        [str(item) for item in definitions] if isinstance(definitions, list) else []
+    )
     if remove:
         drop = set(remove)
         flag_strs = [item for item in flag_strs if item not in drop]
+        definition_strs = [item for item in definition_strs if item not in drop]
     if add:
         for item in add:
-            if item not in flag_strs:
-                flag_strs.append(item)
+            if item.startswith("-") or item.startswith("LINKER:"):
+                if item not in flag_strs:
+                    flag_strs.append(item)
+            elif item not in definition_strs:
+                definition_strs.append(item)
+    coverage["definitions"] = definition_strs
     coverage["flags"] = flag_strs
     return out
 
@@ -378,9 +480,16 @@ def openssf_manifest_for_audit(
     kit_manifest: dict[str, Any],
     *,
     lookup_key: str | None = None,
+    preferred_compile_db: str | None = None,
+    provenance: list[str] | None = None,
 ) -> dict[str, Any]:
     """Kit OpenSSF manifest with consumer ``policy.overrides.openssf-hardening`` applied."""
-    add, remove = openssf_override_dials_for_source(repo_root, lookup_key)
+    add, remove = openssf_override_dials_for_source(
+        repo_root,
+        lookup_key,
+        preferred_compile_db=preferred_compile_db,
+        provenance=provenance,
+    )
     return apply_openssf_coverage_flag_overrides(kit_manifest, add=add, remove=remove)
 
 

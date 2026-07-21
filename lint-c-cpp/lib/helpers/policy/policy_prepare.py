@@ -49,9 +49,9 @@ from scan_policy import (
     stack_array_path_prefixes,
 )
 
-_CXX_SUFFIXES = frozenset({".cc", ".cpp", ".cxx", ".hpp"})
-_HEADER_SUFFIXES = frozenset({".h", ".hpp"})
-_TU_SUFFIXES = frozenset({".c", ".cpp"})
+_CXX_SUFFIXES = frozenset({".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"})
+_HEADER_SUFFIXES = frozenset({".h", ".hh", ".hpp", ".hxx"})
+_TU_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
 
 
 def _include_dir_prefix(repo_root: Path) -> str:
@@ -137,6 +137,10 @@ def _build_raii_pairs(repo_root: Path) -> tuple[RaiiPair, ...]:
                 hint=str(pair["hint"]),
                 acquire_rx=tuple(re.compile(p) for p in pair["acquire"]),
                 release_rx=tuple(re.compile(p) for p in pair["release"]),
+                canonical_files=frozenset(
+                    (repo_root / rel).resolve()
+                    for rel in pair["canonical_files"]
+                ),
             )
         )
     return tuple(pairs)
@@ -158,7 +162,7 @@ def _walk_manifest_paths(repo_root: Path) -> list[Path]:
 
 
 def _stack_array_eligible(repo_root: Path, path: Path) -> bool:
-    if path.suffix not in _TU_SUFFIXES:
+    if path.suffix.lower() not in _TU_SUFFIXES:
         return False
     rel = path.relative_to(repo_root.resolve()).as_posix()
     for root in stack_array_path_prefixes(repo_root):
@@ -175,7 +179,7 @@ def _assign_kinds(repo_root: Path, paths: list[Path]) -> dict[Path, frozenset[st
     for path in paths:
         resolved = path.resolve()
         roles: set[str] = set()
-        suffix = path.suffix
+        suffix = path.suffix.lower()
         if suffix in _HEADER_SUFFIXES:
             roles.add(K_HEADER)
         if suffix in _CXX_SUFFIXES:
@@ -193,7 +197,7 @@ def _assign_kinds(repo_root: Path, paths: list[Path]) -> dict[Path, frozenset[st
 
 
 def _cxx_only(_repo_root: Path, paths: list[Path]) -> list[Path]:
-    return [path for path in paths if path.suffix in _CXX_SUFFIXES]
+    return [path for path in paths if path.suffix.lower() in _CXX_SUFFIXES]
 
 
 def _magic_literals_paths(repo_root: Path, paths: list[Path]) -> list[Path]:

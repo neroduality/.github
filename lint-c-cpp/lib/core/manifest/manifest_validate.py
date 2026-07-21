@@ -45,6 +45,7 @@ ALLOWED_TOP_LEVEL_KEYS = frozenset(
     {
         "compile_db",
         "enabled_lint_jobs",
+        "firmware_build",
         "license_header",
         "policy",
         "scan",
@@ -54,6 +55,7 @@ ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "yamllint",
     }
 )
+ALLOWED_FIRMWARE_BUILD_KEYS = frozenset({"commands"})
 REMOVED_TOP_LEVEL_KEYS = frozenset(
     {
         "clang_tidy",
@@ -80,7 +82,7 @@ ALLOWED_COMPILE_DB_KEYS = frozenset(
     {"firmware", "userspace"}
 )
 ALLOWED_COMPILE_DB_FIRMWARE_ENTRY_KEYS = frozenset(
-    {"compile_commands_json", "commands"}
+    {"compile_commands_json", "commands", "source"}
 )
 ALLOWED_COMPILE_DB_USERSPACE_ENTRY_KEYS = frozenset(
     {"compile_commands_json", "source", "cmake_args"}
@@ -113,6 +115,21 @@ ALLOWED_TOOLCHAIN_KEYS = frozenset({"lint_kit", "script"})
 ALLOWED_LINT_KIT_KEYS = frozenset({"path", "ref", "repository"})
 ALLOWED_SPEC_TRACEABILITY_KEYS = frozenset({"manifest"})
 ALLOWED_YAMLLINT_KEYS = frozenset({"default", "files"})
+REQUIRED_BASELINE_JOBS = frozenset(
+    {
+        "banned_cxx_heap",
+        "banned_libc_io",
+        "clang_tidy",
+        "compile_db",
+        "cppcheck",
+        "guard_clause_style",
+        "nolint_audit",
+        "null_nodiscard",
+        "openssf",
+        "pointer_bounds",
+        "raii_lifetime",
+    }
+)
 
 
 def _unknown_keys(mapping: dict, allowed: frozenset[str], label: str) -> list[str]:
@@ -193,6 +210,32 @@ def validate_scan_block(scan: dict, manifest_path: Path) -> list[str]:
         issues.append(f"{manifest_path}: scan.source_roots must be a non-empty list")
     elif not all(isinstance(item, str) and item.strip() for item in raw_roots):
         issues.append(f"{manifest_path}: scan.source_roots entries must be non-empty strings")
+    else:
+        repo_root = manifest_path.parent.parent.resolve()
+        normalized: list[tuple[str, Path]] = []
+        for item in raw_roots:
+            rel = Path(item)
+            resolved = (repo_root / rel).resolve()
+            if rel.is_absolute() or not resolved.is_relative_to(repo_root):
+                issues.append(
+                    f"{manifest_path}: scan.source_roots entry {item!r} must stay inside the repository"
+                )
+                continue
+            if not resolved.is_dir():
+                issues.append(
+                    f"{manifest_path}: scan.source_roots entry {item!r} is not an existing directory"
+                )
+                continue
+            normalized.append((resolved.relative_to(repo_root).as_posix(), resolved))
+        normalized_names = [name for name, _path in normalized]
+        if len(normalized_names) != len(set(normalized_names)):
+            issues.append(f"{manifest_path}: scan.source_roots contains duplicate roots")
+        for index, (name, path) in enumerate(normalized):
+            for other_name, other_path in normalized[index + 1 :]:
+                if path.is_relative_to(other_path) or other_path.is_relative_to(path):
+                    issues.append(
+                        f"{manifest_path}: scan.source_roots overlap: {name!r} and {other_name!r}"
+                    )
     for key, label in (
         ("c_api_prefix", "scan.c_api_prefix"),
         ("c_macro_prefix", "scan.c_macro_prefix"),
@@ -265,6 +308,37 @@ def validate_enabled_lint_jobs(data: dict, manifest_path: Path) -> list[str]:
             issues.append(f"{manifest_path}: enabled_lint_jobs: duplicate job {job!r}")
             continue
         seen.add(job)
+    missing_baseline = sorted(REQUIRED_BASELINE_JOBS - seen)
+    if missing_baseline:
+        issues.append(
+            f"{manifest_path}: enabled_lint_jobs omits required safety jobs: "
+            f"{', '.join(missing_baseline)}"
+        )
+    for consumer in ("clang_tidy", "cppcheck", "openssf", "firmware_compile_db"):
+        if consumer in seen and "compile_db" not in seen:
+            issues.append(
+                f"{manifest_path}: enabled_lint_jobs: {consumer} requires compile_db"
+            )
+    if "firmware_build" in seen:
+        block = data.get("firmware_build")
+        if block is None:
+            issues.append(
+                f"{manifest_path}: enabled_lint_jobs includes firmware_build but "
+                "firmware_build is null (declare firmware_build.commands)"
+            )
+        elif not isinstance(block, dict):
+            issues.append(f"{manifest_path}: firmware_build must be a mapping or null")
+        else:
+            commands = block.get("commands")
+            if (
+                not isinstance(commands, list)
+                or not commands
+                or not all(isinstance(item, str) and item.strip() for item in commands)
+            ):
+                issues.append(
+                    f"{manifest_path}: firmware_build.commands must be a non-empty list "
+                    "of shell command strings when firmware_build is enabled"
+                )
     return issues
 
 
@@ -273,7 +347,9 @@ def validate_allowed_scan_keys(scan: dict, manifest_path: Path) -> list[str]:
     return [f"{manifest_path}: {message}" for message in issues]
 
 
-def validate_resource_lifetime_regexes(data: dict, manifest_path: Path) -> list[str]:
+def validate_resource_lifetime_regexes(
+    data: dict, manifest_path: Path, repo_root: Path
+) -> list[str]:
     import re
 
     policy = data.get("policy")
@@ -303,6 +379,31 @@ def validate_resource_lifetime_regexes(data: dict, manifest_path: Path) -> list[
         if not isinstance(pair, dict):
             continue
         label = str(pair.get("label") or f"pair[{index}]")
+        canonical_files = pair.get("canonical_files")
+        if not isinstance(canonical_files, list) or not canonical_files:
+            issues.append(
+                f"{manifest_path}: policy.resource_lifetime.pairs[{index}].canonical_files "
+                "must list exact repo-relative implementation paths"
+            )
+        else:
+            for file_index, raw_path in enumerate(canonical_files):
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    issues.append(
+                        f"{manifest_path}: policy.resource_lifetime.pairs[{index}]."
+                        f"canonical_files[{file_index}] must be a non-empty repo-relative path"
+                    )
+                    continue
+                rel = Path(raw_path)
+                resolved = (repo_root / rel).resolve()
+                if (
+                    rel.is_absolute()
+                    or not resolved.is_relative_to(repo_root)
+                    or not resolved.is_file()
+                ):
+                    issues.append(
+                        f"{manifest_path}: policy.resource_lifetime.pairs[{index}]."
+                        f"canonical_files[{file_index}] must name an existing file inside the repository"
+                    )
         for field in ("acquire", "release"):
             raw = pair.get(field, [])
             if not isinstance(raw, list):
@@ -371,6 +472,38 @@ def validate_workflow_waivers(data: dict, manifest_path: Path) -> list[str]:
     return issues
 
 
+def validate_firmware_build(data: dict, manifest_path: Path) -> list[str]:
+    """Validate optional ``firmware_build`` (actual firmware builds; not compile DBs)."""
+    block = data.get("firmware_build")
+    issues = [
+        f"{manifest_path}: {message}"
+        for message in _require_mapping_keys(
+            block,
+            allowed=ALLOWED_FIRMWARE_BUILD_KEYS,
+            label="firmware_build",
+            allow_null=True,
+        )
+    ]
+    if not isinstance(block, dict):
+        return issues
+    commands = block.get("commands")
+    if commands is None:
+        issues.append(f"{manifest_path}: firmware_build.commands is required (use null for unused)")
+    elif not isinstance(commands, list) or not all(
+        isinstance(item, str) and item.strip() for item in commands
+    ):
+        issues.append(
+            f"{manifest_path}: firmware_build.commands must be a list of non-empty strings "
+            "or null"
+        )
+    elif not commands:
+        issues.append(
+            f"{manifest_path}: firmware_build.commands must be non-empty when declared "
+            "(use firmware_build: null if unused)"
+        )
+    return issues
+
+
 def validate_optional_top_level_sections(data: dict, manifest_path: Path) -> list[str]:
     issues: list[str] = []
     toolchain = data.get("toolchain")
@@ -397,6 +530,18 @@ def validate_optional_top_level_sections(data: dict, manifest_path: Path) -> lis
         script = toolchain.get("script")
         if script is not None and (not isinstance(script, str) or not script.strip()):
             issues.append(f"{manifest_path}: toolchain.script must be a non-empty string or null")
+        elif isinstance(script, str):
+            repo_root = manifest_path.parent.parent.resolve()
+            rel = Path(script)
+            resolved = (repo_root / rel).resolve()
+            if (
+                rel.is_absolute()
+                or not resolved.is_relative_to(repo_root)
+                or not resolved.is_file()
+            ):
+                issues.append(
+                    f"{manifest_path}: toolchain.script must name an existing file inside the repository"
+                )
 
     spec_traceability = data.get("spec_traceability")
     issues.extend(
@@ -561,6 +706,11 @@ def _validate_compile_db_firmware_list(firmware: Any, manifest_path: Path) -> li
             issues.append(
                 f"{manifest_path}: {label}.commands entries must be non-empty strings"
             )
+        source = entry.get("source")
+        if source is None:
+            issues.append(f"{manifest_path}: {label}.source is required")
+        elif not isinstance(source, str) or not source.strip():
+            issues.append(f"{manifest_path}: {label}.source must be a non-empty string")
     return issues
 
 
@@ -686,9 +836,10 @@ def main() -> int:
     issues.extend(validate_policy(data, manifest))
     issues.extend(validate_overrides(data, manifest, repo))
     issues.extend(validate_unsafe_api(data, manifest))
-    issues.extend(validate_resource_lifetime_regexes(data, manifest))
+    issues.extend(validate_resource_lifetime_regexes(data, manifest, repo))
     issues.extend(validate_workflow_waivers(data, manifest))
     issues.extend(validate_optional_top_level_sections(data, manifest))
+    issues.extend(validate_firmware_build(data, manifest))
     issues.extend(validate_compile_db(data, manifest))
     if isinstance(data.get("compile_db"), dict):
         from consumer_manifest import compile_db_cmake_coverage_issues

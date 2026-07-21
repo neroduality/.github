@@ -71,21 +71,39 @@ PARAM_ARRAY_BOUND_RE = re.compile(r"\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]\s*[,);]")
 _SAFE_HELPER_PARTS = ("copy_", "try_", "span_ok", "parse_", "bounded_")
 
 
-def _safe_helper_call_in_body(body: str, config: PolicyConfig) -> bool:
+def _safe_helper_call_in_body(
+    body: str, config: PolicyConfig, index_expr: str
+) -> bool:
     prefix = config.c_api_prefix
     part_alt = "|".join(re.escape(part) for part in _SAFE_HELPER_PARTS)
-    return bool(
-        re.search(rf"\b{re.escape(prefix)}_\w*(?:{part_alt})\w*\s*\(", body)
+    expr = re.sub(r"\s+", "", index_expr).rstrip("+")
+    helper_names = [re.escape(token) for token in config.safe_indexing_helpers]
+    helper_name = (
+        rf"(?:{'|'.join(helper_names)}|{re.escape(prefix)}_\w*(?:{part_alt})\w*)"
+        if helper_names
+        else rf"{re.escape(prefix)}_\w*(?:{part_alt})\w*"
     )
+    for match in re.finditer(rf"\b{helper_name}\s*\(([^;]*)\)", body):
+        args = re.sub(r"\s+", "", match.group(1))
+        if re.search(rf"(?<!\w){re.escape(expr)}(?:[uU])?(?!\w)", args):
+            return True
+    return False
 
 
-def function_has_guard(lines: list[str], line_idx: int, config: PolicyConfig) -> bool:
+def function_has_guard_for_index(
+    lines: list[str], line_idx: int, index_expr: str, config: PolicyConfig
+) -> bool:
     body = function_body(lines, line_idx)
-    if any(token in body for token in config.safe_indexing_helpers):
+    expr = re.sub(r"\s+", "", index_expr).rstrip("+")
+    if _safe_helper_call_in_body(body, config, expr):
         return True
-    if _safe_helper_call_in_body(body, config):
-        return True
-    return any(rx.search(body) for rx in GUARD_REGEXES)
+    if not re.fullmatch(r"\w+", expr):
+        return False
+    bound = r"(?:\w*(?:len|cap|size|count|bytes)\w*|\w+\.size\s*\(\s*\))"
+    return bool(
+        re.search(rf"\b{re.escape(expr)}\s*(?:<|<=|>=|>)\s*{bound}", body)
+        or re.search(rf"{bound}\s*(?:<|<=|>=|>)\s*\b{re.escape(expr)}\b", body)
+    )
 
 
 def function_bounds(lines: list[str], line_idx: int) -> tuple[int, int]:
@@ -157,13 +175,17 @@ def literal_index_value(index_expr: str) -> int | None:
 def function_has_output_cap_for_literal(lines: list[str], line_idx: int, lit: int) -> bool:
     body = function_body(lines, line_idx)
     need = lit + 1
-    cap_patterns = (
-        rf"\b\w*(?:cap|len|size)\s*(?:<=|>=|[<>])\s*{need}[uU]?\b",
-        rf"\b\w*(?:cap|len|size)\s*<=\s*{lit}[uU]?\b",
-        rf"\b\w*(?:cap|len|size)\s*>=\s*{need}[uU]?\b",
-        rf"\b\w*(?:cap|len|size)\s*>\s*{lit}[uU]?\b",
-    )
-    return any(re.search(pattern, body) for pattern in cap_patterns)
+    size_name = r"(?:n|rlen|count|bytes|\w*(?:cap|len|size))"
+    for match in re.finditer(
+        rf"\b{size_name}\s*(<=|>=|<|>)\s*(\d+)[uU]?\b", body
+    ):
+        operator, raw_value = match.groups()
+        value = int(raw_value)
+        if operator in {"<", ">="} and value >= need:
+            return True
+        if operator in {"<=", ">"} and value >= lit:
+            return True
+    return False
 
 
 def function_has_loop_bound_for_index(lines: list[str], line_idx: int, index_expr: str) -> bool:
@@ -212,10 +234,8 @@ def subscript_allowed(
         return True
     if function_has_length_guard_for_expr(lines, line_idx, index_expr):
         return True
-    if function_has_guard(lines, line_idx, config):
+    if function_has_guard_for_index(lines, line_idx, index_expr, config):
         return True
-    if is_write and not function_has_guard(lines, line_idx, config):
-        return False
     return False
 
 
@@ -260,7 +280,10 @@ def scan_data_ptrs(path: Path, lines: list[str], config: PolicyConfig) -> list[s
         body = function_body(lines, i)
         if name not in external_buffer_names(body):
             continue
-        if function_has_guard(lines, i, config):
+        if function_has_guard_for_index(lines, i, off or "", config):
+            continue
+        literal_off = literal_index_value(off or "")
+        if literal_off is not None and function_has_output_cap_for_literal(lines, i, literal_off):
             continue
         if function_has_length_guard_for_expr(lines, i, off or ""):
             continue
@@ -391,6 +414,13 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
             "  return true;\n"
             "}\n",
             {"pos_write_bad.c"},
+        ),
+        "unrelated_guard_bad.c": (
+            "bool h(const uint8_t *payload, uint16_t payload_len, unsigned retries) {\n"
+            "  if (retries > 3u) return false;\n"
+            "  return payload[5] == 0;\n"
+            "}\n",
+            {"unrelated_guard_bad.c"},
         ),
         "non_pointer_ok.c": (
             "struct S { uint8_t data[8]; };\n"

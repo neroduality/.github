@@ -58,6 +58,10 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
         "}\n",
         {"wrapped_unspaced_bad.c"},
     ),
+    "wrapped_one_line_bad.c": (
+        "static bool wrapped_one_line_bad(int x) { if (x > 0) { do_work(); return true; } return false; }\n",
+        {"wrapped_one_line_bad.c"},
+    ),
     "guard_ok.c": (
         "static bool guard_ok(int x) {\n"
         "  if (x <= 0) {\n"
@@ -267,12 +271,35 @@ def scan_else_return_false(lines: list[str], path: Path) -> list[str]:
     return issues
 
 
+def scan_inline_wrapped_success(text: str, path: Path) -> list[str]:
+    issues: list[str] = []
+    pattern = re.compile(
+        r"if\s*\(([^)]*)\)\s*\{[^{}]*\breturn\s+true\s*;\s*\}"
+        r"\s*return\s+false\s*;"
+    )
+    for match in pattern.finditer(text):
+        if condition_looks_inverted(match.group(1)):
+            continue
+        if re.search(
+            r"if\s*\([^)]*\)\s*\{[^{}]*\breturn\s+true\s*;\s*\}\s*$",
+            text[: match.start()],
+        ):
+            continue
+        line_no = text.count("\n", 0, match.start()) + 1
+        issues.append(
+            f"{path}:{line_no}: wrap happy path in positive if/return-true; "
+            "use guard clause and fall-through return true"
+        )
+    return issues
+
+
 def scan_file(path: Path, config: PolicyConfig) -> list[str]:
     raw = path.read_text(encoding="utf-8", errors="replace")
     text = strip_comments_and_strings(raw)
     lines = text.splitlines()
     issues: list[str] = []
     issues.extend(scan_else_return_false(lines, path))
+    issues.extend(scan_inline_wrapped_success(text, path))
     seen: set[str] = set()
     for open_idx, close_idx in iter_bool_function_bodies(lines, config):
         for issue in scan_wrapped_success_in_body(lines, path, open_idx, close_idx):

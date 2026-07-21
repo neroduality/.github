@@ -40,7 +40,7 @@ Commands:
   self-test           Run lint-c-cpp unit tests
 
 Options for lint:
-  --custom-lints-only   Stop before compile DB / cppcheck / clang-tidy
+  --custom-lints-only   Stop before compile DB / cppcheck / clang-tidy / firmware DB+build
   -h, --help            Show help
 
 Environment:

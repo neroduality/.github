@@ -959,13 +959,11 @@ def _parse_target_link_libraries(text: str) -> dict[str, list[tuple[str, str]]]:
 
 def _parse_defined_targets(text: str) -> set[str]:
     cleaned = _strip_cmake_comments(text)
-    # ALIAS / IMPORTED / OBJECT libraries cannot (or need not) appear as the first
-    # argument of target_link_libraries: aliases and imported targets are not
-    # compiled here, and object libraries inherit flags through the consuming
-    # target. Excluding them avoids false "must link hardening" rejections.
+    # Aliases and imported targets are not compiled here. OBJECT libraries are
+    # compiled independently and therefore must consume hardening requirements.
     excluded: set[str] = set()
     for match in re.finditer(r"\badd_library\s*\(\s*([^\s)]+)([^)]*)\)", cleaned, re.DOTALL):
-        if re.search(r"\b(?:ALIAS|IMPORTED|OBJECT)\b", match.group(2)):
+        if re.search(r"\b(?:ALIAS|IMPORTED)\b", match.group(2)):
             excluded.add(match.group(1))
     targets = {match.group(1) for match in ADD_TARGET_RE.finditer(cleaned)}
     targets.update(match.group(1) for match in INTERFACE_LIBRARY_RE.finditer(cleaned))
@@ -1667,25 +1665,54 @@ def compile_db_host_probe_cache(
     return _usable_openssf_probe_cache(merged, manifest)
 
 
+def compile_db_cross_probe_cache_for_db(
+    repo_root: Path,
+    compile_commands_json: str,
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, bool]:
+    """``HAVE_*`` probes from one firmware ``compile_commands_json`` build tree."""
+    repo_root = repo_root.resolve()
+    rel = Path(compile_commands_json).as_posix()
+    cache_path = (repo_root / rel).parent / "CMakeCache.txt"
+    raw: dict[str, bool] = {}
+    if cache_path.is_file():
+        raw = _parse_cmake_cache_bools(cache_path)
+    if manifest is None:
+        return raw
+    return _usable_openssf_probe_cache(raw, manifest)
+
+
+def compile_db_cross_probe_caches(
+    repo_root: Path,
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, dict[str, bool]]:
+    """Per-firmware-DB probe caches (UNO vs WBA must not merge)."""
+    from consumer_manifest import compile_db_firmware_entries
+
+    out: dict[str, dict[str, bool]] = {}
+    for entry in compile_db_firmware_entries(repo_root):
+        rel = Path(str(entry["compile_commands_json"])).as_posix()
+        out[rel] = compile_db_cross_probe_cache_for_db(
+            repo_root, rel, manifest=manifest
+        )
+    return out
+
+
 def compile_db_cross_probe_cache(
     repo_root: Path,
     *,
     manifest: dict[str, Any] | None = None,
 ) -> dict[str, bool]:
-    """Merge ``HAVE_*`` probe results from firmware ``compile_db.firmware`` build trees."""
-    from consumer_manifest import compile_db_firmware_compile_command_paths
-
-    caches: list[dict[str, bool]] = []
-    for db_path in compile_db_firmware_compile_command_paths(repo_root):
-        cache_path = db_path.parent / "CMakeCache.txt"
-        if cache_path.is_file():
-            caches.append(_parse_cmake_cache_bools(cache_path))
+    """Merged firmware probe cache (legacy helper; prefer per-DB caches for audit)."""
     merged: dict[str, bool] = {}
-    for cache in caches:
+    for cache in compile_db_cross_probe_caches(repo_root, manifest=None).values():
         merged.update(cache)
     if manifest is None:
         return merged
     return _usable_openssf_probe_cache(merged, manifest)
+
 
 
 def _compile_language_for_source(source: Path) -> str:
@@ -1909,11 +1936,20 @@ def _build_type_from_cache(cache_path: Path) -> str | None:
 
 
 def _owning_build_dir_for_lookup(
-    repo_root: Path, lookup_key: str
+    repo_root: Path,
+    lookup_key: str,
+    *,
+    preferred_compile_db: str | None = None,
+    provenance: list[str] | None = None,
 ) -> Path | None:
     from policy_overrides import owning_compile_commands_json
 
-    rel = owning_compile_commands_json(repo_root, lookup_key)
+    rel = owning_compile_commands_json(
+        repo_root,
+        lookup_key,
+        preferred_compile_db=preferred_compile_db,
+        provenance=provenance,
+    )
     if not rel:
         return None
     return (repo_root / rel).parent
@@ -1927,18 +1963,45 @@ def verify_compile_commands_openssf(
     entries_by_key: dict[str, dict] | None = None,
     source_paths: list[Path],
 ) -> list[str]:
-    """Per-TU audit: every scan C/C++ file must carry full OpenSSF compile/def anchors."""
+    """Per-TU audit: every scan C/C++ file must carry full OpenSSF compile/def anchors.
+
+    Each ``compile_db.firmware[]`` database is audited independently (UNO vs WBA must
+    not share one merged command or probe cache). Host/userspace sources are audited
+    once via the richest/merged map.
+    """
     try:
         kit_manifest = load_hardening_manifest(lint_kit)
     except (FileNotFoundError, ValueError) as exc:
         return [str(exc)]
 
     from policy_overrides import openssf_manifest_for_audit
+    from consumer_manifest import compile_db_firmware_entries
+    from compile_db_util import (
+        entry_compile_db_provenance,
+        load_compile_entries_by_db,
+        storage_key_prefers_firmware_compile,
+    )
 
     repo_root = repo_root.resolve()
     manifest = openssf_manifest_for_audit(repo_root, kit_manifest, lookup_key=None)
     host_probes = compile_db_host_probe_cache(repo_root, manifest=kit_manifest)
-    cross_probes = compile_db_cross_probe_cache(repo_root, manifest=kit_manifest)
+    cross_probes_by_db = compile_db_cross_probe_caches(repo_root, manifest=kit_manifest)
+    entries_by_db = load_compile_entries_by_db(repo_root)
+    if entries_by_key is not None:
+        from policy_overrides import _source_key_in_compile_db
+
+        for fw_entry in compile_db_firmware_entries(repo_root):
+            db_rel = Path(str(fw_entry["compile_commands_json"])).as_posix()
+            bucket = entries_by_db.setdefault(db_rel, {})
+            for lookup_key, entry in entries_by_key.items():
+                if not storage_key_prefers_firmware_compile(lookup_key, repo_root):
+                    continue
+                provenance = entry_compile_db_provenance(entry)
+                if provenance:
+                    if db_rel in provenance:
+                        bucket[lookup_key] = entry
+                elif _source_key_in_compile_db(repo_root, db_rel, lookup_key):
+                    bucket[lookup_key] = entry
     if entries_by_key is not None:
         by_key = entries_by_key
     else:
@@ -1960,41 +2023,65 @@ def verify_compile_commands_openssf(
         command="",
         build_type="Release",
     )
-    cross_flag_sample, _ = compile_db_audit_flags_for_context(
-        manifest,
-        cross_compile=True,
-        probe_cache=cross_probes,
-        language="C",
-        command="",
-        build_type=None,
-    )
-    if not host_flag_sample and not cross_flag_sample:
+    any_cross_sample = False
+    for probes in cross_probes_by_db.values():
+        sample, _ = compile_db_audit_flags_for_context(
+            manifest,
+            cross_compile=True,
+            probe_cache=probes,
+            language="C",
+            command="",
+            build_type=None,
+        )
+        if sample:
+            any_cross_sample = True
+            break
+    if not cross_probes_by_db:
+        # No firmware DBs: allow host-only sample check.
+        legacy_cross = compile_db_cross_probe_cache(repo_root, manifest=kit_manifest)
+        sample, _ = compile_db_audit_flags_for_context(
+            manifest,
+            cross_compile=True,
+            probe_cache=legacy_cross,
+            language="C",
+            command="",
+            build_type=None,
+        )
+        any_cross_sample = bool(sample)
+    if not host_flag_sample and not any_cross_sample:
         return ["compile_commands OpenSSF audit: no coverage.flags anchors in cmake"]
+
     issues: list[str] = []
     deferred_missing_entry: list[tuple[str, str]] = []
     hardened_hosts: list[tuple[Path, str]] = []
-    for source in source_paths:
-        if source.suffix.lower() not in _COMPILE_SUFFIXES:
-            continue
-        lookup_key = source_key(source, repo_root)
-        if lookup_key is None:
-            lookup_key = str(source.resolve())
-        rel = source.relative_to(repo_root).as_posix()
-        entry = by_key.get(lookup_key)
-        if entry is None:
-            deferred_missing_entry.append(
-                (lookup_key, f"compile_commands OpenSSF audit: missing entry for {rel}")
-            )
-            continue
+    firmware_audited: set[str] = set()
+
+    def _audit_one(
+        *,
+        source: Path,
+        lookup_key: str,
+        rel: str,
+        entry: dict,
+        preferred_compile_db: str | None,
+        probe_cache: dict[str, bool],
+        build_dir: Path | None,
+        label_prefix: str,
+    ) -> None:
         command = entry_command(entry)
         cross = _compile_db_audit_cross_context(lookup_key, command, repo_root=repo_root)
         language = _compile_language_for_source(source)
+        provenance = entry_compile_db_provenance(entry)
         tu_manifest = openssf_manifest_for_audit(
-            repo_root, kit_manifest, lookup_key=lookup_key
+            repo_root,
+            kit_manifest,
+            lookup_key=lookup_key,
+            preferred_compile_db=preferred_compile_db,
+            provenance=provenance or None,
         )
-        build_dir = _owning_build_dir_for_lookup(repo_root, lookup_key)
-        build_type = _build_type_from_cache(build_dir / "CMakeCache.txt") if build_dir else None
-        probe_cache = dict(cross_probes if cross else host_probes)
+        build_type = (
+            _build_type_from_cache(build_dir / "CMakeCache.txt") if build_dir else None
+        )
+        cache = dict(probe_cache)
         if build_dir is not None:
             local_cache = build_dir / "CMakeCache.txt"
             if local_cache.is_file():
@@ -2002,17 +2089,17 @@ def verify_compile_commands_openssf(
                     _parse_cmake_cache_bools(local_cache), kit_manifest
                 )
                 if local:
-                    probe_cache.update(local)
+                    cache.update(local)
         flags, probe_issues = compile_db_audit_flags_for_context(
             tu_manifest,
             cross_compile=cross,
-            probe_cache=probe_cache,
+            probe_cache=cache,
             language=language,
             command=command,
             build_type=build_type,
         )
         for msg in probe_issues:
-            issues.append(f"compile_commands OpenSSF audit: {rel}: {msg}")
+            issues.append(f"compile_commands OpenSSF audit: {label_prefix}{rel}: {msg}")
         covered_defs = {
             str(item) for item in _coverage_block(tu_manifest).get("definitions", []) if item
         }
@@ -2026,10 +2113,91 @@ def verify_compile_commands_openssf(
         if missing:
             kind = "cross-compile" if cross else "host-native"
             issues.append(
-                f"compile_commands OpenSSF audit: {rel} ({kind}) missing {', '.join(missing)}"
+                f"compile_commands OpenSSF audit: {label_prefix}{rel} ({kind}) "
+                f"missing {', '.join(missing)}"
+            )
+            return
+        hardened_hosts.append((source.resolve(), command))
+
+    # Firmware profiles: one independent audit per declared compile database.
+    for fw_entry in compile_db_firmware_entries(repo_root):
+        db_rel = Path(str(fw_entry["compile_commands_json"])).as_posix()
+        db_entries = entries_by_db.get(db_rel, {})
+        probe_cache = cross_probes_by_db.get(db_rel, {})
+        build_dir = (repo_root / db_rel).parent
+        label = f"[{db_rel}] "
+        for source in source_paths:
+            if source.suffix.lower() not in _COMPILE_SUFFIXES:
+                continue
+            lookup_key = source_key(source, repo_root)
+            if lookup_key is None:
+                lookup_key = str(source.resolve())
+            entry = db_entries.get(lookup_key)
+            # Test / caller overrides: prefer entries_by_key when provenance matches.
+            if entries_by_key is not None and lookup_key in entries_by_key:
+                override = entries_by_key[lookup_key]
+                prov = entry_compile_db_provenance(override)
+                if not prov or db_rel in prov:
+                    entry = override
+            if entry is None:
+                continue
+            rel = source.relative_to(repo_root).as_posix()
+            _audit_one(
+                source=source,
+                lookup_key=lookup_key,
+                rel=rel,
+                entry=entry,
+                preferred_compile_db=db_rel,
+                probe_cache=probe_cache,
+                build_dir=build_dir,
+                label_prefix=label,
+            )
+            firmware_audited.add(lookup_key)
+
+    # Host / userspace: audit once via richest/merged map (not firmware-preferring keys
+    # already covered above).
+    for source in source_paths:
+        if source.suffix.lower() not in _COMPILE_SUFFIXES:
+            continue
+        lookup_key = source_key(source, repo_root)
+        if lookup_key is None:
+            lookup_key = str(source.resolve())
+        rel = source.relative_to(repo_root).as_posix()
+        if storage_key_prefers_firmware_compile(lookup_key, repo_root):
+            if lookup_key not in firmware_audited:
+                deferred_missing_entry.append(
+                    (
+                        lookup_key,
+                        f"compile_commands OpenSSF audit: missing firmware entry for {rel}",
+                    )
+                )
+            continue
+        entry = by_key.get(lookup_key)
+        if entry is None:
+            deferred_missing_entry.append(
+                (lookup_key, f"compile_commands OpenSSF audit: missing entry for {rel}")
             )
             continue
-        hardened_hosts.append((source.resolve(), command))
+        provenance = entry_compile_db_provenance(entry)
+        preferred = provenance[0] if len(provenance) == 1 else None
+        build_dir = None
+        if preferred:
+            build_dir = (repo_root / preferred).parent
+        elif provenance:
+            build_dir = (repo_root / provenance[0]).parent
+        else:
+            build_dir = _owning_build_dir_for_lookup(repo_root, lookup_key)
+        _audit_one(
+            source=source,
+            lookup_key=lookup_key,
+            rel=rel,
+            entry=entry,
+            preferred_compile_db=preferred,
+            probe_cache=host_probes,
+            build_dir=build_dir,
+            label_prefix="",
+        )
+
     from compile_db_util import amalgamation_included_source_keys
 
     covered = amalgamation_included_source_keys(repo_root, iter(hardened_hosts))
@@ -2066,7 +2234,10 @@ def compile_db_openssf_audit_scope(
     except (FileNotFoundError, ValueError):
         manifest = {}
     host_probes = compile_db_host_probe_cache(repo_root)
-    cross_probes = compile_db_cross_probe_cache(repo_root)
+    cross_probes_by_db = compile_db_cross_probe_caches(repo_root)
+    cross_probe_union: dict[str, bool] = {}
+    for cache in cross_probes_by_db.values():
+        cross_probe_union.update(cache)
     audited = 0
     host_native = 0
     cross_compile = 0
@@ -2102,7 +2273,7 @@ def compile_db_openssf_audit_scope(
             compile_db_audit_flags_for_context(
                 manifest,
                 cross_compile=True,
-                probe_cache=cross_probes,
+                probe_cache=cross_probe_union,
                 language="C",
                 command="",
                 build_type=None,
@@ -2127,6 +2298,7 @@ def scan_repo(
     *,
     source_paths: list[Path],
     cmake_paths: list[Path],
+    audit_links: bool = True,
 ) -> list[str]:
     config = hardening_config(repo_root)
     try:
@@ -2165,7 +2337,8 @@ def scan_repo(
     )
     issues.extend(verify_system_include_policy(repo_root, cmake_paths=cmake_paths))
     issues.extend(verify_sanitizer_before_hardening(repo_root, cmake_paths=cmake_paths))
-    issues.extend(verify_userspace_link_txt_openssf(repo_root, lint_kit, kit_manifest))
+    if audit_links:
+        issues.extend(verify_userspace_link_txt_openssf(repo_root, lint_kit, kit_manifest))
     return issues
 
 
@@ -2223,39 +2396,141 @@ HARDENING_MODULE_INCLUDE_RE = re.compile(
 )
 
 
+def _coverage_flag_list(manifest: dict[str, Any]) -> list[str]:
+    """Dialed coverage flags in manifest order (not sorted)."""
+    return [str(flag) for flag in _coverage_block(manifest).get("flags", []) if flag]
+
+
+def _coverage_definition_list(manifest: dict[str, Any]) -> list[str]:
+    """Dialed coverage definitions in manifest order (not sorted)."""
+    return [str(item) for item in _coverage_block(manifest).get("definitions", []) if item]
+
+
 def _coverage_flag_set(manifest: dict[str, Any]) -> set[str]:
-    return _required_flag_names(manifest)
+    return set(_coverage_flag_list(manifest))
 
 
 def _coverage_definition_set(manifest: dict[str, Any]) -> set[str]:
-    return {str(item) for item in _coverage_block(manifest).get("definitions", []) if item}
+    return set(_coverage_definition_list(manifest))
+
+
+# Mutually exclusive libc++ hardening modes — never emit more than one in flat Make.
+_LIBCPP_HARDENING_MODE_DEFS = frozenset(
+    {
+        "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST",
+        "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
+    }
+)
+
+
+def _language_compile_flag_names(manifest: dict[str, Any], language: str) -> set[str]:
+    """Bare compile flag names from cmake.common + cmake.<language> (no link tokens)."""
+    required, probe_gated, genex_gated, _defs = _resolve_flag_requirements(manifest, language)
+    names: set[str] = set()
+    for flag in required:
+        if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
+            continue
+        names.add(flag)
+    for flag, _probe in probe_gated:
+        if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
+            continue
+        names.add(flag)
+    for flag, _gate in genex_gated:
+        if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
+            continue
+        names.add(flag)
+    return names
+
+
+def _ordered_language_coverage_flags(manifest: dict[str, Any], language: str) -> list[str]:
+    """Coverage flags for one language, preserving coverage.flags order.
+
+    Flags declared by the kit keep their C/CXX scope. Consumer-added flags that
+    have no kit language metadata apply to both languages.
+    """
+    lang_flags = _language_compile_flag_names(manifest, language)
+    known_flags = _language_compile_flag_names(
+        manifest, "C"
+    ) | _language_compile_flag_names(manifest, "CXX")
+    return [
+        flag
+        for flag in _coverage_flag_list(manifest)
+        if (flag in lang_flags or flag not in known_flags)
+        and flag not in {"-pie", "-shared"}
+        and not flag.startswith("LINKER:")
+    ]
+
+
+def _ordered_make_definitions(manifest: dict[str, Any]) -> list[str]:
+    """Flat Make definitions; omit exclusive ``_LIBCPP_HARDENING_MODE`` (CONFIG genex only)."""
+    out: list[str] = []
+    for definition in _coverage_definition_list(manifest):
+        if definition in _LIBCPP_HARDENING_MODE_DEFS:
+            continue
+        out.append(definition)
+    return out
+
+
+def _hash_license_comment_lines(repo_root: Path) -> list[str]:
+    """``#``-comment license lines from consumer ``license_header`` (required)."""
+    import spdx_headers as spdx
+
+    spdx.configure_from_manifest(repo_root)
+    return spdx._expected_comment_lines(spdx._year(), "#")
+
+
+def _openssf_generated_preamble(repo_root: Path, note_lines: list[str]) -> str:
+    """Consumer ``license_header`` (hash comments) + generation notes for cmake/mk emits."""
+    parts = list(_hash_license_comment_lines(repo_root))
+    parts.append("#")
+    for line in note_lines:
+        parts.append("#" if line == "" else f"# {line}")
+    parts.append("#")
+    return "\n".join(parts) + "\n"
+
+
+def _dial_note_lines(dial_note: str | None, default_lines: list[str]) -> list[str]:
+    if dial_note is None:
+        return list(default_lines)
+    lines: list[str] = []
+    for index, raw in enumerate(dial_note.split("\n")):
+        if index > 0 and raw.startswith("# "):
+            lines.append(raw[2:])
+        elif index > 0 and raw == "#":
+            lines.append("")
+        else:
+            lines.append(raw)
+    return lines
 
 
 def generate_hardening_cmake(
     manifest: dict[str, Any],
     *,
+    repo_root: Path,
     dial_note: str | None = None,
 ) -> str:
     """Synthesize ``Hardening.cmake`` emitting only dialed ``coverage`` tokens.
 
     ``manifest`` must already have ``coverage.flags`` / ``definitions`` dialed (global
     and/or by_compile_db). Kit undialed manifest ⇒ FULL emit.
+
+    C compile options come from cmake.C (+ common); CXX from cmake.CXX (+ common).
+    Preamble is the consumer ``license_header`` from ``repo_root``.
     """
     covered_flags = _coverage_flag_set(manifest)
     covered_defs = _coverage_definition_set(manifest)
     arch_keyed = _compile_arch_keyed_flags(manifest)
     arch_flag_set = {flag for flags in arch_keyed.values() for flag in flags}
-    note = dial_note or (
-        "Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.\n"
-        "# Sync via policy.overrides.openssf-hardening (fail-on-change rewrite)."
+    note_lines = _dial_note_lines(
+        dial_note,
+        [
+            "Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.",
+            "Sync via policy.overrides.openssf-hardening (fail-on-change rewrite).",
+        ],
     )
     lines = [
-        "# SPDX-License-Identifier: Apache-2.0\n",
-        "#\n",
-        "# Copyright (C) 2026 Nero Duality, LLC.\n",
-        "#\n",
-        f"# {note}\n",
-        "#\n",
+        _openssf_generated_preamble(repo_root, note_lines),
         "include(${CMAKE_CURRENT_LIST_DIR}/CompilerHardeningProbes.cmake)\n",
         "include(CMakeParseArguments)\n",
         "function(define_hardening)\n",
@@ -2320,6 +2595,34 @@ def generate_hardening_cmake(
                     continue
                 compile_by_lang[language].add(_arch_gated_compile_genex(arch_key, flag))
 
+    known_compile_flags = _language_compile_flag_names(
+        manifest, "C"
+    ) | _language_compile_flag_names(manifest, "CXX")
+    consumer_added_compile_flags = [
+        flag
+        for flag in _coverage_flag_list(manifest)
+        if flag not in known_compile_flags
+        and flag not in {"-pie", "-shared"}
+        and not flag.startswith("LINKER:")
+    ]
+    for language in ("C", "CXX"):
+        compile_by_lang[language].update(consumer_added_compile_flags)
+
+    known_definitions: set[str] = set()
+    for language in ("C", "CXX"):
+        _required, _probe_gated, _genex_gated, language_definitions = (
+            _resolve_flag_requirements(manifest, language)
+        )
+        known_definitions.update(
+            definition for definition, _gate in language_definitions if definition
+        )
+    definitions.update(
+        definition
+        for definition in _coverage_definition_list(manifest)
+        if definition not in known_definitions
+        and definition not in _LIBCPP_HARDENING_MODE_DEFS
+    )
+
     for language in ("C", "CXX"):
         compile_flags = compile_by_lang[language]
         if not compile_flags:
@@ -2351,63 +2654,61 @@ def generate_hardening_cmake(
 def generate_hardening_flags_mk(
     manifest: dict[str, Any],
     *,
+    repo_root: Path,
     dial_note: str | None = None,
     compile_commands_json: str | None = None,
 ) -> str:
-    """Flat Make fragment of dialed OpenSSF compile flags for Arduino / non-CMake firmware."""
-    covered_flags = sorted(
-        flag
-        for flag in _coverage_flag_set(manifest)
-        if flag
-        and flag not in {"-pie", "-shared"}
-        and not flag.startswith("LINKER:")
-    )
-    covered_defs = sorted(_coverage_definition_set(manifest))
+    """Flat Make fragment of dialed OpenSSF compile flags for Arduino / non-CMake firmware.
+
+    Preserves ``coverage.flags`` / ``definitions`` order. CFLAGS come from cmake.C
+    (+ common); CXXFLAGS from cmake.CXX (+ common). Mutually exclusive
+    ``_LIBCPP_HARDENING_MODE`` definitions are omitted (CONFIG genex only works in CMake).
+    Preamble is the consumer ``license_header`` from ``repo_root``.
+    """
+    c_flags = _ordered_language_coverage_flags(manifest, "C")
+    cxx_flags = _ordered_language_coverage_flags(manifest, "CXX")
+    covered_defs = _ordered_make_definitions(manifest)
     cppflags = []
     for definition in covered_defs:
         if definition.startswith("-D"):
             cppflags.append(definition)
         else:
             cppflags.append(f"-D{definition}")
-    note = dial_note or (
-        "Generated from kit openssf-hardening-manifest + dials — do not hand-edit."
-    )
-    if compile_commands_json:
-        note = (
-            f"Generated from kit openssf-hardening-manifest + dials for "
+    default_notes = [
+        "Generated from kit openssf-hardening-manifest + dials — do not hand-edit.",
+        "Arduino / Make consumers: include this file and append to build.extra_flags",
+        "(or equivalent), e.g. NFC_BUILD_EXTRA_FLAGS += $(NERO_OPENSSF_CFLAGS)",
+    ]
+    if compile_commands_json and dial_note is None:
+        default_notes[0] = (
+            "Generated from kit openssf-hardening-manifest + dials for "
             f"{compile_commands_json} — do not hand-edit."
         )
-    cflags = " ".join(covered_flags)
+    note_lines = _dial_note_lines(dial_note, default_notes)
+    cflags = " ".join(c_flags)
+    cxxflags = " ".join(cxx_flags)
     defs = " ".join(cppflags)
     return (
-        "# SPDX-License-Identifier: Apache-2.0\n"
-        "#\n"
-        "# Copyright (C) 2026 Nero Duality, LLC.\n"
-        "#\n"
-        f"# {note}\n"
-        "#\n"
-        "# Arduino / Make consumers: include this file and append to build.extra_flags\n"
-        "# (or equivalent), e.g. NFC_BUILD_EXTRA_FLAGS += $(NERO_OPENSSF_CFLAGS)\n"
-        "#\n"
-        f"NERO_OPENSSF_CFLAGS := {cflags}\n"
-        f"NERO_OPENSSF_CXXFLAGS := {cflags}\n"
-        f"NERO_OPENSSF_CPPFLAGS := {defs}\n"
+        _openssf_generated_preamble(repo_root, note_lines)
+        + f"NERO_OPENSSF_CFLAGS := {cflags}\n"
+        + f"NERO_OPENSSF_CXXFLAGS := {cxxflags}\n"
+        + f"NERO_OPENSSF_CPPFLAGS := {defs}\n"
     )
 
 
-def generate_probes_cmake(manifest: dict[str, Any]) -> str:
+def generate_probes_cmake(manifest: dict[str, Any], *, repo_root: Path) -> str:
     """FULL OpenSSF ``CompilerHardeningProbes.cmake`` body from the kit manifest."""
     c_probes, cxx_probes, link_probes, arm_flag = _collect_synthetic_probe_groups(manifest)
     all_probes = sorted(_collect_manifest_probes(manifest))
 
     lines = [
-        "# SPDX-License-Identifier: Apache-2.0\n",
-        "#\n",
-        "# Copyright (C) 2026 Nero Duality, LLC.\n",
-        "#\n",
-        "# Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.\n",
-        "# Copy from .github/lint-c-cpp/cmake/; relax via policy.overrides.openssf-hardening.\n",
-        "#\n",
+        _openssf_generated_preamble(
+            repo_root,
+            [
+                "Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.",
+                "Copy from .github/lint-c-cpp/cmake/; relax via policy.overrides.openssf-hardening.",
+            ],
+        ),
         "include(CheckCCompilerFlag)\n",
         "include(CheckCXXCompilerFlag)\n",
         "include(CheckLinkerFlag)\n",
@@ -2460,14 +2761,23 @@ def generate_probes_cmake(manifest: dict[str, Any]) -> str:
     return "".join(lines)
 
 
-def write_generated_hardening_cmake(path: Path, manifest: dict[str, Any], *, dial_note: str | None = None) -> None:
+def write_generated_hardening_cmake(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    repo_root: Path,
+    dial_note: str | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(generate_hardening_cmake(manifest, dial_note=dial_note), encoding="utf-8")
+    path.write_text(
+        generate_hardening_cmake(manifest, repo_root=repo_root, dial_note=dial_note),
+        encoding="utf-8",
+    )
 
 
-def write_generated_probes_cmake(path: Path, manifest: dict[str, Any]) -> None:
+def write_generated_probes_cmake(path: Path, manifest: dict[str, Any], *, repo_root: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(generate_probes_cmake(manifest), encoding="utf-8")
+    path.write_text(generate_probes_cmake(manifest, repo_root=repo_root), encoding="utf-8")
 
 
 def _normalize_generated_cmake(text: str) -> str:
@@ -2505,19 +2815,24 @@ def _expected_consumer_hardening_modules(
     expected: dict[str, str] = {}
     global_add, global_remove = global_override_dials(repo_root, "openssf-hardening")
     if not global_add and not global_remove:
-        expected["Hardening.cmake"] = generate_hardening_cmake(kit_manifest)
+        expected["Hardening.cmake"] = generate_hardening_cmake(
+            kit_manifest, repo_root=repo_root
+        )
     else:
         global_manifest = openssf_manifest_for_audit(
             repo_root, kit_manifest, lookup_key=None
         )
         expected["Hardening.cmake"] = generate_hardening_cmake(
             global_manifest,
+            repo_root=repo_root,
             dial_note=(
                 "Generated from kit openssf-hardening-manifest + global "
                 "policy.overrides.openssf-hardening — do not hand-edit."
             ),
         )
-    expected["CompilerHardeningProbes.cmake"] = generate_probes_cmake(kit_manifest)
+    expected["CompilerHardeningProbes.cmake"] = generate_probes_cmake(
+        kit_manifest, repo_root=repo_root
+    )
 
     for item in _by_compile_db_entries(repo_root, "openssf-hardening"):
         raw = item.get("compile_commands_json")
@@ -2533,6 +2848,7 @@ def _expected_consumer_hardening_modules(
         name = f"Hardening.by-{compile_db_override_slug(compile_json)}.cmake"
         expected[name] = generate_hardening_cmake(
             dialed,
+            repo_root=repo_root,
             dial_note=(
                 f"Generated from kit openssf-hardening-manifest + dials for "
                 f"{compile_json} — do not hand-edit."
@@ -2541,6 +2857,7 @@ def _expected_consumer_hardening_modules(
         flags_name = f"Hardening.flags.by-{compile_db_override_slug(compile_json)}.mk"
         expected[flags_name] = generate_hardening_flags_mk(
             dialed,
+            repo_root=repo_root,
             compile_commands_json=compile_json,
         )
     return expected
@@ -2561,8 +2878,18 @@ def _compile_json_for_cmake_root(repo_root: Path, cmake_rel: str) -> str | None:
             continue
         if cmake_rel == f"{source}/CMakeLists.txt" or cmake_rel.startswith(f"{source}/"):
             return str(entry["compile_commands_json"])
+    for entry in compile_db_firmware_entries(repo_root):
+        source = str(entry.get("source") or "").strip().strip("/")
+        if not source:
+            continue
+        if cmake_rel == f"{source}/CMakeLists.txt" or cmake_rel.startswith(f"{source}/"):
+            return str(entry["compile_commands_json"])
     for root in firmware_compile_source_roots(repo_root):
         if cmake_rel == f"{root}/CMakeLists.txt" or cmake_rel.startswith(f"{root}/"):
+            for entry in compile_db_firmware_entries(repo_root):
+                entry_source = str(entry.get("source") or "").strip().strip("/")
+                if entry_source == root:
+                    return str(entry["compile_commands_json"])
             firmware = compile_db_firmware_entries(repo_root)
             if firmware:
                 return str(firmware[0]["compile_commands_json"])
@@ -2586,30 +2913,19 @@ def sync_kit_cmake_regen(
     lint_kit: Path,
     kit_manifest: dict[str, Any],
 ) -> list[str]:
-    """Rewrite kit/consumer OpenSSF cmake to dialed generate; fail-on-change if dirty.
+    """Rewrite consumer OpenSSF cmake to dialed generate; fail-on-change if dirty.
 
     Same gate as license/yamllint/markdownlint: write in place, then ask to commit
     and re-run. Does not leave stale files as soft policy-only findings.
+
+    Never rewrites ``lint_kit/cmake`` — the kit install is shared read-only for
+    consumers; kit templates are updated only in the lint-c-cpp repo itself.
     """
     from format_fail_on_change import fail_on_change_error
 
+    _ = lint_kit  # call-site compatibility; kit install is never mutated
     rewritten: list[str] = []
-    kit_cmake = lint_kit / "cmake"
     consumer_dir = repo_root / _consumer_cmake_dir(kit_manifest)
-
-    kit_expected = {
-        "Hardening.cmake": generate_hardening_cmake(kit_manifest),
-        "CompilerHardeningProbes.cmake": generate_probes_cmake(kit_manifest),
-    }
-    for name, body in kit_expected.items():
-        kit_path = kit_cmake / name
-        expected = _normalize_generated_cmake(body)
-        if not kit_path.is_file() or _normalize_generated_cmake(
-            kit_path.read_text(encoding="utf-8")
-        ) != expected:
-            kit_path.parent.mkdir(parents=True, exist_ok=True)
-            kit_path.write_text(expected, encoding="utf-8")
-            rewritten.append(f"kit cmake/{name}")
 
     expected = _expected_consumer_hardening_modules(repo_root, kit_manifest)
     consumer_dir.mkdir(parents=True, exist_ok=True)
@@ -2850,6 +3166,11 @@ def verify_userspace_link_txt_openssf(
             continue
         cache = build_dir / "CMakeCache.txt"
         if not cache.is_file():
+            issues.append(
+                f"OpenSSF link audit: configured userspace build "
+                f"{build_dir.relative_to(repo_root)} has no CMakeCache.txt "
+                "(configure the declared userspace project before auditing)"
+            )
             continue
         link_texts = _userspace_link_texts(build_dir)
         if not link_texts:
@@ -2888,12 +3209,16 @@ def apply_openssf_coverage_flag_overrides_local(
     return apply_openssf_coverage_flag_overrides(manifest, add=add, remove=remove)
 
 
-def _write_synthetic_hardening_fixture(path: Path, manifest: dict[str, Any]) -> None:
-    write_generated_hardening_cmake(path, manifest)
+def _write_synthetic_hardening_fixture(
+    path: Path, manifest: dict[str, Any], *, repo_root: Path
+) -> None:
+    write_generated_hardening_cmake(path, manifest, repo_root=repo_root)
 
 
-def _write_synthetic_probes_fixture(path: Path, manifest: dict[str, Any]) -> None:
-    write_generated_probes_cmake(path, manifest)
+def _write_synthetic_probes_fixture(
+    path: Path, manifest: dict[str, Any], *, repo_root: Path
+) -> None:
+    write_generated_probes_cmake(path, manifest, repo_root=repo_root)
 
 
 def _collect_synthetic_probe_groups(
@@ -2972,12 +3297,6 @@ def run_self_test() -> int:
         (kit / "config" / "openssf-hardening-manifest.yaml").write_bytes(manifest_src.read_bytes())
         manifest = _load_yaml(manifest_src)
 
-        (kit / "cmake").mkdir(parents=True)
-        write_generated_hardening_cmake(kit / "cmake" / "Hardening.cmake", manifest)
-        write_generated_probes_cmake(kit / "cmake" / "CompilerHardeningProbes.cmake", manifest)
-        write_generated_hardening_cmake(repo / "cmake" / "Hardening.cmake", manifest)
-        write_generated_probes_cmake(repo / "cmake" / "CompilerHardeningProbes.cmake", manifest)
-
         good_cmake = """cmake_minimum_required(VERSION 3.20)
 project(sample C)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Hardening.cmake")
@@ -3031,10 +3350,38 @@ target_link_libraries(core PUBLIC hardening)
             "  - spec_traceability\n"
             "  - cppcheck\n"
             "  - firmware_compile_db\n"
+            "firmware_build: null\n"
             "spec_traceability: null\n"
             "toolchain: null\n"
             "workflow: null\n"
             "yamllint: null\n",
+            encoding="utf-8",
+        )
+        (kit / "cmake").mkdir(parents=True)
+        write_generated_hardening_cmake(
+            kit / "cmake" / "Hardening.cmake", manifest, repo_root=repo
+        )
+        write_generated_probes_cmake(
+            kit / "cmake" / "CompilerHardeningProbes.cmake", manifest, repo_root=repo
+        )
+        write_generated_hardening_cmake(
+            repo / "cmake" / "Hardening.cmake", manifest, repo_root=repo
+        )
+        write_generated_probes_cmake(
+            repo / "cmake" / "CompilerHardeningProbes.cmake", manifest, repo_root=repo
+        )
+        synthetic_build = repo / "build" / "lint" / "userspace"
+        synthetic_build.mkdir(parents=True)
+        (synthetic_build / "CMakeCache.txt").write_text(
+            "CMAKE_BUILD_TYPE:STRING=Release\n", encoding="utf-8"
+        )
+        synthetic_link_tokens = [
+            token
+            for token in _required_flag_names(manifest)
+            if token.startswith("LINKER:") or token == "-pie"
+        ]
+        (synthetic_build / "build.ninja").write_text(
+            "command = cc " + " ".join(synthetic_link_tokens) + "\n",
             encoding="utf-8",
         )
 
@@ -3050,6 +3397,14 @@ target_link_libraries(core PUBLIC hardening)
             return 1
 
         bad = repo / "userspace" / "CMakeLists.txt"
+        bad.write_text(good_cmake + "\nadd_library(obj OBJECT obj.c)\n", encoding="utf-8")
+        if not any(
+            "target 'obj' must transitively link 'hardening'" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
+            print("self-test miss: expected unhardened OBJECT library rejection", file=sys.stderr)
+            return 1
+
         bad.write_text(good_cmake + '\nadd_link_options(-pie "LINKER:-z,relro")\n', encoding="utf-8")
         if not any("raw -pie" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
             print("self-test miss: expected duplicate -pie detection", file=sys.stderr)
@@ -3069,7 +3424,9 @@ target_link_libraries(core PUBLIC hardening)
             return 1
 
         (repo / "userspace" / "CMakeLists.txt").write_text(good_cmake, encoding="utf-8")
-        _write_synthetic_hardening_fixture(repo / "cmake" / "Hardening.cmake", manifest)
+        _write_synthetic_hardening_fixture(
+            repo / "cmake" / "Hardening.cmake", manifest, repo_root=repo
+        )
 
         bad_werror = good_cmake + "\nadd_compile_options(-Werror)\n"
         (repo / "userspace" / "CMakeLists.txt").write_text(bad_werror, encoding="utf-8")
@@ -3100,7 +3457,9 @@ target_link_libraries(${COMPONENT_LIB} PUBLIC hardening)
             print("self-test miss: expected ungated genex flag rejection", file=sys.stderr)
             return 1
 
-        _write_synthetic_hardening_fixture(repo / "cmake" / "Hardening.cmake", manifest)
+        _write_synthetic_hardening_fixture(
+            repo / "cmake" / "Hardening.cmake", manifest, repo_root=repo
+        )
         embedded_bad = repo / "esp-idf" / "main" / "CMakeLists.txt"
         embedded_bad.write_text(embedded_cmake + '\nadd_compile_options(-fPIE)\n', encoding="utf-8")
         if not any("raw -fPIE in CMakeLists" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
@@ -3115,6 +3474,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_hardening_path_args(parser)
     parser.add_argument("--lint-kit", type=Path, dest="lint_kit")
+    parser.add_argument(
+        "--skip-link-audit",
+        action="store_true",
+        help="Run source/config checks without requiring configured link surfaces",
+    )
     args = parser.parse_args()
 
     if args.self_test:
@@ -3150,6 +3514,7 @@ def main() -> int:
         lint_kit,
         source_paths=source_paths,
         cmake_paths=cmake_paths,
+        audit_links=not args.skip_link_audit,
     )
     if not issues:
         try:

@@ -16,7 +16,8 @@
 # limitations under the License.
 #
 # Scan scope and policy accessors from lint-c-cpp.yaml.
-# Paths: consumer_manifest.py scan-paths <job> → --paths-file; unsafe_api job skips wrapper_files.
+# Paths: consumer_manifest.py scan-paths <job> → --paths-file. Unsafe wrappers stay
+# in scope; individual checks may waive only the APIs their wrapper implements.
 # BANNED_C_API_NAMES is the SoT for Python banned_libc_io (includes heap + output APIs).
 
 from __future__ import annotations
@@ -42,7 +43,9 @@ from consumer_manifest import (
 
 # Policy / tidy / OpenSSF / format TUs and headers. Arduino ``.ino`` is not a
 # normal translation unit here — only license headers + codespell (see profiles).
-SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".c", ".cpp"})
+SOURCE_SUFFIXES = frozenset(
+    {".h", ".hh", ".hpp", ".hxx", ".c", ".cc", ".cpp", ".cxx"}
+)
 INO_SUFFIX = ".ino"
 
 # --- Central scan job profiles (single registry) ---
@@ -57,13 +60,16 @@ JOB_ALL_FILES = "all_files"
 JOB_CODESPELL = "codespell"
 JOB_LICENSE = "license"
 JOB_CMAKE = "cmake"
+JOB_PYTHON = "python"
 
-_CODESPELL_SUFFIXES = frozenset({".c", ".cpp", ".h", ".hpp", INO_SUFFIX, ".md", ".yaml", ".yml"})
-_FORMAT_C_SUFFIXES = frozenset({".c", ".h", ".cpp", ".hpp"})
+_CODESPELL_SUFFIXES = SOURCE_SUFFIXES | frozenset(
+    {INO_SUFFIX, ".md", ".yaml", ".yml"}
+)
+_FORMAT_C_SUFFIXES = SOURCE_SUFFIXES
 
 _SCAN_JOB_PROFILES: dict[str, dict[str, object]] = {
     JOB_SOURCE: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": SOURCE_SUFFIXES},
-    JOB_UNSAFE_API: {"exclude_unsafe_wrappers": True, "exclude_nolint_allowed": False, "suffixes": SOURCE_SUFFIXES},
+    JOB_UNSAFE_API: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": SOURCE_SUFFIXES},
     JOB_NOLINT: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": True, "suffixes": SOURCE_SUFFIXES},
     JOB_MARKDOWN: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": frozenset({".md"})},
     JOB_FORMAT_C: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": _FORMAT_C_SUFFIXES},
@@ -72,6 +78,7 @@ _SCAN_JOB_PROFILES: dict[str, dict[str, object]] = {
     JOB_ALL_FILES: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": None},
     JOB_CODESPELL: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": _CODESPELL_SUFFIXES},
     JOB_LICENSE: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": None},
+    JOB_PYTHON: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": frozenset({".py"})},
 }
 
 # Whole-repo walks (respecting VCS/gitignore dir skips), not limited to scan.source_roots.
@@ -83,6 +90,7 @@ _REPO_WIDE_SCAN_JOBS = frozenset(
         JOB_CODESPELL,
         JOB_LICENSE,
         JOB_ALL_FILES,
+        JOB_PYTHON,
     }
 )
 
@@ -97,8 +105,8 @@ UNSAFE_API_SCAN_STEPS = frozenset(
     }
 )
 
-# bugprone-unsafe-functions targets in the unsafe-api clang-tidy pass; wrapper_files
-# diagnostics are dropped after clang-tidy via clang_tidy_wrapper_filter.py.
+# bugprone-unsafe-functions targets in the unsafe-api clang-tidy pass. The output
+# filter waives only intentional non-heap wrapper diagnostics, not whole files.
 CLANG_TIDY_UNSAFE_FUNCTIONS = frozenset(
     {"strcpy", "strcat", "sprintf", "vsprintf", "gets"}
 )
@@ -282,7 +290,7 @@ def license_header_classify(path: Path) -> LicenseHeaderKind | None:
         return LicenseHeaderKind("hash")
     if suf in {".sh", ".bash", ".mk", ".yaml", ".yml", ".py"}:
         return LicenseHeaderKind("hash")
-    if suf in {".cpp", ".hpp", ".h", ".cc", ".cxx", ".c", INO_SUFFIX}:
+    if suf in SOURCE_SUFFIXES | {INO_SUFFIX}:
         return LicenseHeaderKind("cpp")
     if suf == ".md":
         return LicenseHeaderKind("md")
@@ -632,7 +640,9 @@ def _walk_repo_wide_paths(
         paths.append(path)
     from git_ignore import drop_gitignored_paths
 
-    return drop_gitignored_paths(repo_root, sorted(paths))
+    if scan_exclude_gitignore_enabled(repo_root):
+        return drop_gitignored_paths(repo_root, sorted(paths))
+    return sorted(paths)
 
 
 def _walk_scoped_paths(
@@ -658,7 +668,9 @@ def _walk_scoped_paths(
             paths.append(path)
     from git_ignore import drop_gitignored_paths
 
-    return drop_gitignored_paths(repo_root, sorted(paths))
+    if scan_exclude_gitignore_enabled(repo_root):
+        return drop_gitignored_paths(repo_root, sorted(paths))
+    return sorted(paths)
 
 
 def scan_job_profile(job: str) -> dict[str, object]:

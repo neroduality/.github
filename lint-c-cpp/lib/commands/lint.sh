@@ -26,7 +26,7 @@ Usage: lint-c-cpp.sh lint [OPTIONS]
 Run lint checks for a consumer repo (configure via .github/lint-c-cpp.yaml).
 
 Options:
-  --custom-lints-only   Stop before compile DB / cppcheck / clang-tidy / firmware steps
+  --custom-lints-only   Stop before compile DB / cppcheck / clang-tidy / firmware DB+build
   -h, --help            Show help
 EOF
 }
@@ -56,6 +56,7 @@ lint_kit="$LINT_KIT"
 lib="${lint_kit}/lib"
 manifest="${lib}/core/manifest"
 tools="${lib}/core/tools"
+workflow="${lib}/core/workflow"
 helpers="${lib}/helpers"
 toolchain="${helpers}/toolchain"
 cd "$repo_root"
@@ -123,12 +124,15 @@ source "${toolchain}/cppcheck_toolchain.sh"
 source "${toolchain}/clang_toolchain.sh"
 # shellcheck source=../helpers/toolchain/codespell.sh
 source "${toolchain}/codespell.sh"
+# shellcheck source=../helpers/toolchain/python_lint.sh
+source "${toolchain}/python_lint.sh"
 
 shopt -s nullglob
 
 read_scan_paths_into markdown md_files
 read_scan_paths_into format_c format_files
 read_scan_paths_into shell shell_scripts
+read_scan_paths_into python python_files
 
 have_tool() { command -v "$1" >/dev/null 2>&1; }
 require_tool() { have_tool "$1" || {
@@ -178,8 +182,11 @@ want_clang_format() {
 
 _lint_section_n=0
 section() {
+  # usage: section JOB_ID "Human-readable title"
+  local job_id=$1
+  local title=$2
   _lint_section_n=$((_lint_section_n + 1))
-  printf '\n── %s. %s ──\n' "$_lint_section_n" "$1"
+  printf '\n── %s. %s — %s ──\n' "$_lint_section_n" "$job_id" "$title"
 }
 lint_jobs="${LINT_JOBS:-$(nproc)}"
 
@@ -193,6 +200,8 @@ run() {
 run python3 "${tools}/tool_versions_check.py" --self-test
 run python3 "${tools}/tool_versions_check.py" verify
 run python3 "${manifest}/manifest_validate.py" --repo-root "$repo_root"
+run python3 "${tools}/tool_versions_check.py" verify --workflow
+run python3 "${workflow}/workflow_container_policy.py" --repo-root "$repo_root"
 
 {
   read -r _enabled_lint_job_count _known_lint_job_count
@@ -237,6 +246,7 @@ run_python_with_scan_paths() {
 
 run_python_hardening_verify() {
   local source_paths cmake_paths
+  local -a extra_args=("$@")
   source_paths="$(mktemp)"
   cmake_paths="$(mktemp)"
   write_scan_paths source "$source_paths"
@@ -245,7 +255,8 @@ run_python_hardening_verify() {
     --repo-root "$repo_root" \
     --lint-kit "$lint_kit" \
     --paths-file "$source_paths" \
-    --cmake-paths-file "$cmake_paths" || {
+    --cmake-paths-file "$cmake_paths" \
+    "${extra_args[@]}" || {
     rm -f "$source_paths" "$cmake_paths"
     exit 1
   }
@@ -299,7 +310,7 @@ verify_clang_tidy_overlay_config() {
 
 run_clang_tidy_filtered() {
   local drop_wrappers=0 ec=0 filter_ec=0 compile_db_p="" config_file=""
-  local -a files=()
+  local -a files=() pipe_ec=()
   if [[ ${1:-} == --unsafe-api ]]; then
     drop_wrappers=1
     shift
@@ -330,20 +341,36 @@ run_clang_tidy_filtered() {
   if ((drop_wrappers != 0)); then
     if [[ -n $run_clang_tidy_bin ]]; then
       run "$run_clang_tidy_bin" -warnings-as-errors '*' "${tidy_args[@]}" "${files[@]}" 2>&1 \
-        | python3 -u "$filter_py" --repo-root "$repo_root" --stream
-      filter_ec=${PIPESTATUS[1]}
+        | python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
+      pipe_ec=("${PIPESTATUS[@]}")
+      ec=${pipe_ec[0]}
+      filter_ec=${pipe_ec[1]}
     else
       if [[ -n $config_file ]]; then
         run "$clang_tidy_bin" -p "$compile_db_p" --warnings-as-errors='*' -config-file="$config_file" "${files[@]}" 2>&1 \
-          | python3 -u "$filter_py" --repo-root "$repo_root" --stream
+          | python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
       else
         run "$clang_tidy_bin" -p "$compile_db_p" --warnings-as-errors='*' "${files[@]}" 2>&1 \
-          | python3 -u "$filter_py" --repo-root "$repo_root" --stream
+          | python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
       fi
-      filter_ec=${PIPESTATUS[1]}
+      pipe_ec=("${PIPESTATUS[@]}")
+      ec=${pipe_ec[0]}
+      filter_ec=${pipe_ec[1]}
     fi
     set -e
-    return "$filter_ec"
+    if ((filter_ec == 1)); then
+      return 1
+    fi
+    if ((filter_ec != 0 && filter_ec != 2)); then
+      return "$filter_ec"
+    fi
+    if ((ec != 0)); then
+      if ((ec == 1 && filter_ec == 2)); then
+        return 0
+      fi
+      return "$ec"
+    fi
+    return 0
   fi
 
   if [[ -n $run_clang_tidy_bin ]]; then
@@ -362,7 +389,7 @@ run_clang_tidy_filtered() {
 }
 
 if lint_job_enabled license; then
-  section "Apply license headers"
+  section license "Apply license headers"
   require_tool python3
   run python3 "${helpers}/policy/policy_runner.py" --self-test --script spdx_headers.py
   run_python_with_scan_paths policy/spdx_headers.py license --fail-on-change
@@ -371,7 +398,7 @@ else
 fi
 
 if lint_job_enabled yamllint; then
-  section "Sort and format YAML (yamllint)"
+  section yamllint "Sort and format YAML (yamllint)"
   want_pyyaml "yamllint"
   run python3 "${helpers}/policy/policy_runner.py" --self-test --script yaml_manifest.py
   run_python_with_scan_paths policy/yaml_manifest.py yaml --fail-on-change
@@ -380,7 +407,7 @@ else
 fi
 
 if lint_job_enabled markdownlint; then
-  section "Fix and check Markdown (markdownlint)"
+  section markdownlint "Fix and check Markdown (markdownlint)"
   if want_markdownlint "Markdown"; then
     run lint_kit_markdownlint_self_test
     run lint_kit_markdownlint_fail_on_change "$markdownlint_config" "${md_files[@]}"
@@ -390,7 +417,7 @@ else
 fi
 
 if lint_job_enabled format; then
-  section "Format C/C++ and shell sources (clang-format, shfmt, shellcheck, codespell)"
+  section format "Format C/C++, shell, and Python sources (clang-format, shfmt, shellcheck, codespell, ruff, mypy)"
   run lint_kit_format_toolchain_self_test
   if want_clang_format "C/C++ formatting"; then
     run lint_kit_clang_format_fail_on_change "$clang_format_style" "$clang_format_bin" "${format_files[@]}"
@@ -418,21 +445,25 @@ if lint_job_enabled format; then
     run lint_kit_codespell_self_test
     run bash "${toolchain}/codespell.sh"
   fi
+  # Python lint (ruff + mypy) shares the format job, like shellcheck/codespell.
+  # Only requires uv/uvx when the repo actually has Python sources.
+  python_targets=()
+  for rel in "${python_files[@]}"; do
+    [[ -f $repo_root/$rel ]] && python_targets+=("$repo_root/$rel")
+  done
+  if ((${#python_targets[@]} > 0)); then
+    run lint_kit_python_lint_self_test
+    run bash "${toolchain}/python_lint.sh"
+  else
+    printf 'ruff/mypy: OK (no Python sources to check)\n'
+  fi
 else
   skip_lint_job format
 fi
 
-if lint_job_enabled openssf; then
-  section "OpenSSF hardening (validate manifest + hardeninglint)"
-  run python3 "${helpers}/policy/hardening_verify.py" --self-test
-  run_python_hardening_verify
-else
-  skip_lint_job openssf
-fi
-
 if ((custom_lints_only == 0)); then
   if lint_job_enabled compile_db; then
-    section "Generate compile databases (host configure → merge → OpenSSF audit)"
+    section compile_db "Generate compile databases (host configure → merge → OpenSSF audit)"
     if want_tool cmake "compile database generation"; then
       run python3 "${helpers}/compile_db/compile_db_lint.py" --self-test
       run_compile_db_lint configure-compile-db --jobs "$lint_jobs"
@@ -440,37 +471,51 @@ if ((custom_lints_only == 0)); then
   else
     skip_lint_job compile_db
   fi
+fi
 
+if lint_job_enabled openssf; then
+  section openssf "OpenSSF hardening (validate manifest + hardeninglint)"
+  run python3 "${helpers}/policy/hardening_verify.py" --self-test
+  if ((custom_lints_only != 0)); then
+    run_python_hardening_verify --skip-link-audit
+  else
+    run_python_hardening_verify
+  fi
+else
+  skip_lint_job openssf
+fi
+
+if ((custom_lints_only == 0)); then
   if lint_job_enabled clang_tidy; then
-    section "Run clang-tidy"
+    section clang_tidy "Run clang-tidy"
     if want_clang_tidy "C++ static analysis"; then
       merge_dir="${repo_root}/build/clang-tidy-compile-db"
       tidy_log="$(mktemp)"
+      tidy_batches_file="$(mktemp)"
       tidy_batches=()
-      tidy_batch_ec=0
       source_paths="$(mktemp)"
       unsafe_paths="$(mktemp)"
       write_scan_paths source "$source_paths"
       write_scan_paths unsafe_api "$unsafe_paths"
-      while IFS= read -r line; do
-        tidy_batches+=("$line")
-      done < <(
-        python3 "${helpers}/compile_db/compile_db_lint.py" \
+      if ! python3 "${helpers}/compile_db/compile_db_lint.py" \
           --repo-root "$repo_root" \
           --lint-kit "$lint_kit" \
           --source-paths-file "$source_paths" \
           --unsafe-api-paths-file "$unsafe_paths" \
-          clang-tidy-batches 2>"$tidy_log"
-      )
+          clang-tidy-batches >"$tidy_batches_file" 2>"$tidy_log"; then
+        if [[ -s $tidy_log ]]; then
+          cat "$tidy_log" >&2
+        fi
+        rm -f "$source_paths" "$unsafe_paths" "$tidy_log" "$tidy_batches_file"
+        exit 1
+      fi
       rm -f "$source_paths" "$unsafe_paths"
-      tidy_batch_ec=$?
       if [[ -s $tidy_log ]]; then
         cat "$tidy_log"
       fi
       rm -f "$tidy_log"
-      if ((tidy_batch_ec != 0)); then
-        exit "$tidy_batch_ec"
-      fi
+      mapfile -t tidy_batches <"$tidy_batches_file"
+      rm -f "$tidy_batches_file"
       if ((${#tidy_batches[@]} == 0)); then
         printf 'clang-tidy (source): OK (no files to check)\n'
         printf 'clang-tidy (unsafe-api): OK (no files to check)\n'
@@ -529,77 +574,77 @@ PY
 fi
 
 if lint_job_enabled banned_cxx_heap; then
-  section "Enforce no C++ new/delete (wrapper_files exempt; complements clang-tidy/cppcheck — malloc/free in unsafe-api pass)"
+  section banned_cxx_heap "Enforce no C++ new/delete (including unsafe wrappers; complements clang-tidy/cppcheck)"
   run_python_policy_linter policy/banned_cxx_heap.py "use stack/static buffers; no C++ new/delete."
 else
   skip_lint_job banned_cxx_heap
 fi
 
 if lint_job_enabled banned_libc_io; then
-  section "Enforce bounded libc and project I/O wrappers (wrapper_files exempt; complements clang-tidy/cppcheck)"
+  section banned_libc_io "Enforce bounded libc and project I/O wrappers (capability-specific wrapper waivers)"
   run_python_policy_linter policy/banned_libc_io.py "use bounded helpers; list wrappers in policy.unsafe_api.wrapper_files."
 else
   skip_lint_job banned_libc_io
 fi
 
 if lint_job_enabled null_nodiscard; then
-  section "Require project NULL and NODISCARD macros"
+  section null_nodiscard "Require project NULL and NODISCARD macros"
   run_python_policy_linter policy/null_nodiscard.py "use project NULL and NODISCARD macros."
 else
   skip_lint_job null_nodiscard
 fi
 
 if lint_job_enabled relative_includes; then
-  section "Ban relative #includes"
+  section relative_includes "Ban relative #includes"
   run_python_policy_linter policy/relative_includes.py "use include path basenames; no ../ in #include."
 else
   skip_lint_job relative_includes
 fi
 
 if lint_job_enabled duplicate_includes; then
-  section "Remove duplicate #includes"
+  section duplicate_includes "Remove duplicate #includes"
   run_python_policy_linter policy/duplicate_includes.py "remove mixed-angle/quote or macro #include dupes; exact repeats are clang-tidy."
 else
   skip_lint_job duplicate_includes
 fi
 
 if lint_job_enabled shared_constant_dupes; then
-  section "Ban duplicate spec constant definitions"
+  section shared_constant_dupes "Ban duplicate spec constant definitions"
   run_python_policy_linter policy/shared_constant_dupes.py "one authoritative definition per spec constant."
 else
   skip_lint_job shared_constant_dupes
 fi
 
 if lint_job_enabled magic_literals; then
-  section "Require constant placement and bounds (complements clang-tidy)"
+  section magic_literals "Require constant placement and bounds (complements clang-tidy)"
   run_python_policy_linter policy/magic_literals.py "fix constant placement and bounds; general magic numbers are enforced by clang-tidy."
 else
   skip_lint_job magic_literals
 fi
 
 if lint_job_enabled guard_clause_style; then
-  section "Require early-return guard clauses"
+  section guard_clause_style "Require early-return guard clauses"
   run_python_policy_linter policy/guard_clause_style.py "prefer guard clauses over positive if/return-true wrappers."
 else
   skip_lint_job guard_clause_style
 fi
 
 if lint_job_enabled pointer_bounds; then
-  section "Require safe external buffer indexing"
+  section pointer_bounds "Require safe external buffer indexing"
   run_python_policy_linter policy/pointer_bounds.py "use approved span/copy helpers for external buffers."
 else
   skip_lint_job pointer_bounds
 fi
 
 if lint_job_enabled raii_lifetime; then
-  section "Require RAII for C/C++ resource pairs"
+  section raii_lifetime "Require RAII for C/C++ resource pairs"
   run_python_policy_linter policy/raii_lifetime.py "use project RAII wrappers for acquire/release pairs."
 else
   skip_lint_job raii_lifetime
 fi
 
 if lint_job_enabled nolint_audit; then
-  section "Audit NOLINT / cppcheck inline suppressions (forbidden)"
+  section nolint_audit "Audit NOLINT / cppcheck inline suppressions (forbidden)"
   run_python_policy_linter policy/nolint_audit.py "remove NOLINT and cppcheck-suppress outside policy.nolint_allowed; fix the underlying issue instead."
 else
   skip_lint_job nolint_audit
@@ -612,7 +657,7 @@ from pathlib import Path
 from consumer_manifest import spec_traceability_path
 sys.exit(0 if spec_traceability_path(Path('$repo_root')) else 1)
 "; then
-    section "Verify spec traceability manifest"
+    section spec_traceability "Verify spec traceability manifest"
     want_pyyaml "spec traceability"
     run_python_policy_linter policy/spec_traceability.py "update docs/spec-traceability.yaml or fix source literals."
   fi
@@ -626,7 +671,7 @@ fi
 }
 
 if lint_job_enabled cppcheck; then
-  section "Run cppcheck (config/cppcheck-manifest.yaml)"
+  section cppcheck "Run cppcheck (config/cppcheck-manifest.yaml)"
   if want_cppcheck "static analysis"; then
     run lint_kit_cppcheck_self_test
     run_compile_db_lint run-cppcheck --jobs "$lint_jobs"
@@ -636,13 +681,23 @@ else
 fi
 
 if lint_job_enabled firmware_compile_db; then
-  section "Compile firmware (compile_db.firmware)"
+  section firmware_compile_db "Ensure firmware compile databases (compile_db.firmware)"
   run python3 "${helpers}/compile_db/compile_db_lint.py" \
     --repo-root "$repo_root" \
     --lint-kit "$lint_kit" \
     ensure-firmware-compile-db
 else
   skip_lint_job firmware_compile_db
+fi
+
+if lint_job_enabled firmware_build; then
+  section firmware_build "Build firmware (firmware_build.commands)"
+  run python3 "${helpers}/compile_db/compile_db_lint.py" \
+    --repo-root "$repo_root" \
+    --lint-kit "$lint_kit" \
+    run-firmware-build
+else
+  skip_lint_job firmware_build
 fi
 
 printf '\nAll lint checks passed.\n'

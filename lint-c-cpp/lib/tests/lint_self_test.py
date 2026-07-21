@@ -141,6 +141,7 @@ SIMULATED_SHELL_LINTER_SCRIPTS = frozenset(
         "codespell.sh",
         "cppcheck_toolchain.sh",
         "markdownlint_toolchain.sh",
+        "python_lint.sh",
     }
 )
 
@@ -170,15 +171,30 @@ _POLICY_TEST_MANIFEST = r"""license_header: |
   # SPDX-License-Identifier: Apache-2.0
   #
   # Copyright (C) 2026 Nero Duality, LLC.
+  #
+  # Licensed under the Apache License, Version 2.0 (the "License");
+  # you may not use this file except in compliance with the License.
+  # You may obtain a copy of the License at
+  #
+  #     http://www.apache.org/licenses/LICENSE-2.0
+  #
+  # Unless required by applicable law or agreed to in writing, software
+  # distributed under the License is distributed on an "AS IS" BASIS,
+  # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  # See the License for the specific language governing permissions and
+  # limitations under the License.
 
+firmware_build:
+  commands: ["make firmware"]
 spec_traceability: null
 toolchain: null
 workflow: null
 
 compile_db:
   firmware:
-    - commands: ["make firmware"]
+    - commands: ["make firmware-compile-db"]
       compile_commands_json: build/firmware/compile_commands.json
+      source: firmware
   userspace:
     - compile_commands_json: build/lint/userspace/compile_commands.json
       source: userspace
@@ -209,7 +225,7 @@ policy:
       - label: fopen/fclose
         acquire: ["\\bfopen\\s*\\("]
         release: ["\\bfclose\\s*\\("]
-        canonical_files: [sample_file_raii.h]
+        canonical_files: [include/sample/sample_file_raii.h]
         hint: project file RAII helpers
   shared_c_cxx_source_roots: null
   unsafe_api:
@@ -256,11 +272,45 @@ _NULL_OVERRIDES_YAML = (
 
 _NULL_TOP_LEVEL_YAML = (
     _ENABLED_LINT_JOBS_YAML
-    + "spec_traceability: null\n"
+    + "firmware_build:\n  commands: [make firmware]\n"
+    "spec_traceability: null\n"
     "toolchain: null\n"
     "workflow: null\n"
     "yamllint: null\n"
 )
+
+
+def write_license_only_manifest(root: Path, *, license_blob: str | None = None) -> None:
+    """Minimal consumer manifest so OpenSSF generators can read license_header."""
+    blob = license_blob or (
+        "  # SPDX-License-Identifier: Apache-2.0\n"
+        "  #\n"
+        "  # Copyright (C) 2026 Nero Duality, LLC.\n"
+        "  #\n"
+        "  # Licensed under the Apache License, Version 2.0 (the \"License\");\n"
+        "  # you may not use this file except in compliance with the License.\n"
+        "  # You may obtain a copy of the License at\n"
+        "  #\n"
+        "  #     http://www.apache.org/licenses/LICENSE-2.0\n"
+        "  #\n"
+        "  # Unless required by applicable law or agreed to in writing, software\n"
+        "  # distributed under the License is distributed on an \"AS IS\" BASIS,\n"
+        "  # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n"
+        "  # See the License for the specific language governing permissions and\n"
+        "  # limitations under the License.\n"
+    )
+    write(
+        root / ".github/lint-c-cpp.yaml",
+        "license_header: |\n"
+        + blob
+        + "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
+        "  source_roots: [core]\n"
+        "compile_db:\n  firmware: []\n  userspace: []\n"
+        "policy:\n  constants_headers: [limits.h]\n"
+        + _NULL_OVERRIDES_YAML
+        + _NULL_TOP_LEVEL_YAML,
+    )
 
 
 def write_canonical_lint_manifest(root: Path) -> None:
@@ -297,11 +347,29 @@ def ensure_license_headers(spdx: ModuleType, paths: list[Path], year: int) -> No
 
 
 def write_custom_lints_smoke_repo(root: Path, lint_kit: Path) -> None:
+    from hardening_verify import (
+        generate_hardening_cmake,
+        generate_probes_cmake,
+        load_hardening_manifest,
+        _normalize_generated_cmake,
+    )
+
     (root / "cmake").mkdir(parents=True)
-    for name in ("Hardening.cmake", "CompilerHardeningProbes.cmake"):
-        shutil.copy2(lint_kit / "cmake" / name, root / "cmake" / name)
+    for source_root in ("core", "port", "include", "userspace", "tests", "esp-idf"):
+        (root / source_root).mkdir(parents=True, exist_ok=True)
 
     write_canonical_lint_manifest(root)
+    kit_manifest = load_hardening_manifest(lint_kit)
+    (root / "cmake" / "Hardening.cmake").write_text(
+        _normalize_generated_cmake(
+            generate_hardening_cmake(kit_manifest, repo_root=root)
+        ),
+        encoding="utf-8",
+    )
+    (root / "cmake" / "CompilerHardeningProbes.cmake").write_text(
+        _normalize_generated_cmake(generate_probes_cmake(kit_manifest, repo_root=root)),
+        encoding="utf-8",
+    )
     spdx = load_helper("policy/spdx_headers.py")
     spdx.configure_from_manifest(root)
     year = spdx._year()
@@ -330,12 +398,27 @@ def write_custom_lints_smoke_repo(root: Path, lint_kit: Path) -> None:
         header + '#pragma once\n#include "sample_null.h"\nstatic inline void sample_copy_bytes(void *d, const void *s, size_t n) { (void)d; (void)s; (void)n; }\n',
     )
     write(
+        root / "include/sample/sample_file_raii.h",
+        header + "#pragma once\nstruct SampleFileHandle {};\n",
+    )
+    write(
         root / "include/sample/limits.h",
         header + "#pragma once\nenum { SAMPLE_MAX = 64u };\n",
     )
     write(
         root / "core/ok.c",
         header + '#include "sample_null.h"\nvoid sample_ok(void) { (void)SAMPLE_NULL; }\n',
+    )
+    write(
+        root / ".github/workflows/lint.yml",
+        "name: lint\n"
+        '"on": [push]\n'
+        "jobs:\n"
+        "  lint:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    container: ubuntu:24.04\n"
+        "    steps:\n"
+        "      - run: echo lint\n",
     )
 
     clang_format = shutil.which("clang-format")
@@ -393,7 +476,14 @@ def render_policy_test_manifest() -> str:
 
 
 def write_policy_test_manifest(root: Path) -> None:
+    for source_root in ("core", "port", "include", "userspace", "tests", "esp-idf"):
+        (root / source_root).mkdir(parents=True, exist_ok=True)
     write(root / ".github/lint-c-cpp.yaml", render_policy_test_manifest())
+    # Manifest validation requires policy.resource_lifetime canonical_files to exist.
+    write(
+        root / "include/sample/sample_file_raii.h",
+        "#pragma once\nstruct SampleFileHandle {};\n",
+    )
 
 
 def reported_basenames(errors: list[str]) -> set[str]:
@@ -573,6 +663,7 @@ class LintStepCoverage(unittest.TestCase):
                 "consumer_manifest.py",
                 "manifest_validate.py",
                 "tool_versions_check.py",
+                "workflow_container_policy.py",
             }
         )
         policy_referenced = referenced - core_scripts - POLICY_INFRA_SCRIPTS
@@ -593,6 +684,22 @@ class LintStepCoverage(unittest.TestCase):
         )
         self.assertEqual(bad_result.returncode, 2)
         self.assertIn("unknown argument", bad_result.stderr)
+
+    def test_ci_lint_fails_closed_when_tidy_batch_generation_fails(self) -> None:
+        ci_text = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'clang-tidy-batches >"$tidy_batches_file" 2>"$tidy_log"; then',
+            ci_text,
+        )
+        self.assertIn(
+            'rm -f "$source_paths" "$unsafe_paths" "$tidy_log" "$tidy_batches_file"',
+            ci_text,
+        )
+        self.assertNotIn("tidy_batch_ec=$?", ci_text)
+        self.assertNotRegex(
+            ci_text,
+            r"done\s*<\s*<\(\s*python3[\s\S]+?clang-tidy-batches",
+        )
 
     def test_cppcheck_banned_apis_live_in_python_not_cfg(self) -> None:
         from scan_policy import BANNED_C_API_NAMES, BANNED_HEAP_C_API_NAMES
@@ -806,6 +913,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 f"    - commands: [make fw]\n      compile_commands_json: {fw_json}\n"
+                "      source: firmware\n"
                 "  userspace:\n"
                 "    - cmake_args: null\n"
                 f"      compile_commands_json: {host_json}\n"
@@ -826,7 +934,8 @@ class LintStepCoverage(unittest.TestCase):
                 "    cppcheck: {add: null, remove: null, by_compile_db: null}\n"
                 f"    openssf-hardening:\n{openssf_block}"
                 + _ENABLED_LINT_JOBS_YAML
-                + "spec_traceability: null\ntoolchain: null\nworkflow: null\nyamllint: null\n"
+                + "firmware_build:\n  commands: [make firmware]\n"
+                "spec_traceability: null\ntoolchain: null\nworkflow: null\nyamllint: null\n"
             )
 
         null_block = "      add: null\n      remove: null\n      by_compile_db: null\n"
@@ -1154,6 +1263,8 @@ class LintStepCoverage(unittest.TestCase):
         import compile_db_util
         from hardening_verify import (
             compile_db_audit_flags_for_context,
+            generate_hardening_cmake,
+            generate_hardening_flags_mk,
             load_hardening_manifest,
             verify_compile_commands_openssf,
         )
@@ -1183,12 +1294,43 @@ class LintStepCoverage(unittest.TestCase):
             self.assertNotIn(flag, stripped_flags)
         self.assertIn("-Wall", stripped_flags)
         augmented = apply_openssf_coverage_flag_overrides(
-            kit_manifest, add=("-fNFC-test-flag",), remove=None
+            kit_manifest,
+            add=("-fNFC-test-flag", "NFC_TEST_ASSERTIONS"),
+            remove=("_GLIBCXX_ASSERTIONS",),
         )
         self.assertIn(
             "-fNFC-test-flag",
             {str(item) for item in augmented.get("coverage", {}).get("flags", [])},
         )
+        augmented_definitions = {
+            str(item) for item in augmented.get("coverage", {}).get("definitions", [])
+        }
+        self.assertIn("NFC_TEST_ASSERTIONS", augmented_definitions)
+        self.assertNotIn("_GLIBCXX_ASSERTIONS", augmented_definitions)
+        license_root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, license_root, True)
+        write_license_only_manifest(license_root)
+        generated_make = generate_hardening_flags_mk(augmented, repo_root=license_root)
+        c_line = next(
+            line for line in generated_make.splitlines()
+            if line.startswith("NERO_OPENSSF_CFLAGS")
+        )
+        cxx_line = next(
+            line for line in generated_make.splitlines()
+            if line.startswith("NERO_OPENSSF_CXXFLAGS")
+        )
+        cpp_line = next(
+            line for line in generated_make.splitlines()
+            if line.startswith("NERO_OPENSSF_CPPFLAGS")
+        )
+        self.assertIn("-fNFC-test-flag", c_line)
+        self.assertIn("-fNFC-test-flag", cxx_line)
+        self.assertIn("-DNFC_TEST_ASSERTIONS", cpp_line)
+        self.assertNotIn("_GLIBCXX_ASSERTIONS", cpp_line)
+        generated_cmake = generate_hardening_cmake(augmented, repo_root=license_root)
+        self.assertIn("-fNFC-test-flag", generated_cmake)
+        self.assertIn("NFC_TEST_ASSERTIONS", generated_cmake)
+        self.assertNotIn("_GLIBCXX_ASSERTIONS", generated_cmake)
 
         host_flags = (
             "-Wall -Wextra -Wformat -Wformat=2 -Wconversion -Wsign-conversion "
@@ -1215,8 +1357,10 @@ class LintStepCoverage(unittest.TestCase):
                 "  firmware:\n"
                 "    - commands: [make TARGET=arduino_uno_r4wifi firmware-compile-db]\n"
                 "      compile_commands_json: build/lint/firmware/arduino/compile_commands.json\n"
+                "      source: firmware\n"
                 "    - commands: [make TARGET=nucleo_wba65ri firmware-compile-db]\n"
                 "      compile_commands_json: build/lint/firmware/nucleo/compile_commands.json\n"
+                "      source: firmware\n"
                 "  userspace:\n"
                 "    - cmake_args: [-DCMAKE_BUILD_TYPE=Release]\n"
                 "      compile_commands_json: build/lint/tests/compile_commands.json\n"
@@ -1238,7 +1382,8 @@ class LintStepCoverage(unittest.TestCase):
                 "    cppcheck: {add: null, remove: null, by_compile_db: null}\n"
                 f"    openssf-hardening:\n{openssf_overrides}"
                 + _ENABLED_LINT_JOBS_YAML
-                + "spec_traceability: null\n"
+                + "firmware_build:\n  commands: [make firmware]\n"
+                "spec_traceability: null\n"
                 "toolchain: null\n"
                 "workflow: null\n"
                 "yamllint: null\n",
@@ -1447,15 +1592,6 @@ class LintStepCoverage(unittest.TestCase):
                 entries["tests/host_ut.c"]["command"] = (
                     f"/usr/bin/cc {host_flags} -c {(root / 'tests/host_ut.c').resolve()}"
                 )
-                # Restore firmware DBs for membership checks (unused when entries_by_key set,
-                # but keep consistent for dials).
-                _write_db(
-                    root,
-                    arduino_db,
-                    "firmware/nfc/src/board.c",
-                    f"/opt/arm-none-eabi-gcc {cross_flags_full} -c "
-                    f"{(root / 'firmware/nfc/src/board.c').resolve()}",
-                )
                 issues = verify_compile_commands_openssf(
                     root,
                     LINT_KIT,
@@ -1467,6 +1603,7 @@ class LintStepCoverage(unittest.TestCase):
                                 f"{(root / 'firmware/nfc/src/board.c').resolve()}"
                             ),
                             "file": str((root / "firmware/nfc/src/board.c").resolve()),
+                            compile_db_util.PROVENANCE_KEY: [arduino_db],
                         },
                     },
                     source_paths=[root / "firmware/nfc/src/board.c"],
@@ -1537,6 +1674,7 @@ class LintStepCoverage(unittest.TestCase):
                 "  firmware:\n"
                 "    - commands: [make fw]\n"
                 "      compile_commands_json: build/lint/firmware/compile_commands.json\n"
+                "      source: firmware\n"
                 "  userspace:\n"
                 "    - cmake_args: null\n"
                 "      compile_commands_json: build/lint/tests/compile_commands.json\n"
@@ -1569,9 +1707,11 @@ class LintStepCoverage(unittest.TestCase):
                 "          remove: [nullPointer]\n"
                 "    openssf-hardening: {add: null, remove: null, by_compile_db: null}\n"
                 + _ENABLED_LINT_JOBS_YAML
-                + "spec_traceability: null\ntoolchain: null\nworkflow: null\nyamllint: null\n",
+                + "firmware_build:\n  commands: [make firmware]\n"
+                "spec_traceability: null\ntoolchain: null\nworkflow: null\nyamllint: null\n",
             )
             write(root / "firmware/src/fw.c", "void fw(void) {}\n")
+            write(root / "firmware/src/fw.h", "#pragma once\nvoid fw(void);\n")
             write(root / "tests/host.c", "void host(void) {}\n")
             write(root / "include/sample/sample_null.h", "#pragma once\n")
             fw_db = root / "build/lint/firmware/compile_commands.json"
@@ -1657,6 +1797,32 @@ class LintStepCoverage(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn("-bugprone-easily-swappable-parameters", fw_cfg)
 
+            # Synthesized headers inherit every database profile covering their
+            # manifest source root.
+            header_buf = io.StringIO()
+            with redirect_stdout(header_buf):
+                header_rc = compile_db_lint._emit_clang_tidy_pass_batches(
+                    pass_id="source",
+                    label="headers",
+                    sources=[root / "firmware/src/fw.h"],
+                    overlays=[
+                        {
+                            "id": "c-headers",
+                            "language": "c",
+                            "config": ".clang-tidy-c",
+                            "suffixes": [".h"],
+                        }
+                    ],
+                    config_dir=merge_dir,
+                    repo_root=root,
+                    lint_kit=LINT_KIT,
+                )
+            self.assertEqual(header_rc, 0)
+            self.assertIn(
+                ".clang-tidy-c.by-build__lint__firmware__compile_commands_json",
+                header_buf.getvalue(),
+            )
+
     def test_manifest_validate_rejects_missing_policy_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1666,6 +1832,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n  firmware:\n"
                 "    - commands: [make fw]\n"
                 "      compile_commands_json: build/fw/compile_commands.json\n"
+                "      source: firmware\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
                 "      source: userspace\n"
@@ -1853,6 +2020,53 @@ class LintStepCoverage(unittest.TestCase):
             )
         self.assertNotEqual(result.returncode, 0)
 
+    def test_python_lint_is_wired_into_format_job(self) -> None:
+        # ruff + mypy run inside the `format` job (like shellcheck/codespell),
+        # not as a separate enabled_lint_jobs entry.
+        self.assertNotIn("python_lint", KNOWN_LINT_JOBS_ORDERED)
+        self.assertTrue((CONFIG_DIR / "ruff.toml").is_file())
+        self.assertTrue((CONFIG_DIR / "mypy.ini").is_file())
+        self.assertTrue((TOOLCHAIN_DIR / "python_lint.sh").is_file())
+        lint_sh = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
+        self.assertIn('source "${toolchain}/python_lint.sh"', lint_sh)
+        self.assertIn("run lint_kit_python_lint_self_test", lint_sh)
+        self.assertIn('run bash "${toolchain}/python_lint.sh"', lint_sh)
+        self.assertNotIn('section python_lint', lint_sh)
+        # The python steps live under the format section, after codespell.
+        format_idx = lint_sh.index("section format ")
+        codespell_idx = lint_sh.index('run bash "${toolchain}/codespell.sh"')
+        python_idx = lint_sh.index('run bash "${toolchain}/python_lint.sh"')
+        self.assertLess(format_idx, codespell_idx)
+        self.assertLess(codespell_idx, python_idx)
+
+    def test_python_lint_helper_check_config_emits_ruff_and_mypy(self) -> None:
+        result = run_checked(
+            ["bash", str(TOOLCHAIN_DIR / "python_lint.sh"), "--check-config", "docs/example.py"],
+        )
+        self.assertIn("uvx ruff@", result.stdout)
+        self.assertIn("uvx mypy@", result.stdout)
+        self.assertIn("ruff.toml", result.stdout)
+        self.assertIn("mypy.ini", result.stdout)
+        self.assertIn("docs/example.py", result.stdout)
+
+    @unittest.skipUnless(shutil.which("uvx"), "uvx required for python_lint self-test")
+    def test_python_lint_self_test_flags_violation(self) -> None:
+        # The self-test proves ruff flags a known violation — "an equal error is thrown"
+        # for the python_lint job, matching the other jobs' pre-run self-tests.
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{TOOLCHAIN_DIR / "python_lint.sh"}"; lint_kit_python_lint_self_test',
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("python_lint self-test: OK", result.stdout)
+
     def test_manifest_validate_requires_compile_db(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2016,6 +2230,7 @@ class LintStepCoverage(unittest.TestCase):
                 "  source_roots: [firmware, userspace, esp-idf]\n"
                 "compile_db:\n  firmware:\n"
                 f"    - compile_commands_json: {fw_json}\n"
+                "      source: firmware\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
                 "      source: userspace\n"
@@ -2103,6 +2318,7 @@ class LintStepCoverage(unittest.TestCase):
                 "  source_roots: [firmware, userspace]\n"
                 "compile_db:\n  firmware:\n"
                 f"    - compile_commands_json: {fw_json}\n"
+                "      source: firmware\n"
                 "      commands: [make firmware-compile-db]\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
@@ -2156,7 +2372,12 @@ class LintStepCoverage(unittest.TestCase):
         """-fcf-protection must be host+x86_64 gated, never a bare cross compile option."""
         from hardening_verify import generate_hardening_cmake, load_hardening_manifest
 
-        body = generate_hardening_cmake(load_hardening_manifest(LINT_KIT))
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            body = generate_hardening_cmake(
+                load_hardening_manifest(LINT_KIT), repo_root=license_root
+            )
         self.assertNotIn("$<$<COMPILE_LANGUAGE:C>:-fcf-protection=full>", body)
         self.assertIn("-fcf-protection=full", body)
         self.assertIn("_hardening_host", body)
@@ -2198,8 +2419,11 @@ class LintStepCoverage(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            kit = root / "kit"
             (root / "cmake").mkdir(parents=True)
             (root / "userspace").mkdir()
+            shutil.copytree(LINT_KIT / "config", kit / "config")
+            (kit / "cmake").mkdir(parents=True)
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
@@ -2210,18 +2434,27 @@ class LintStepCoverage(unittest.TestCase):
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
                 "      source: userspace\n"
                 "policy:\n  constants_headers: [limits.h]\n"
-                + _NULL_OVERRIDES_YAML,
+                + _NULL_OVERRIDES_YAML
+                + "firmware_build: null\n"
+                "spec_traceability: null\n"
+                "toolchain: null\n"
+                "workflow: null\n"
+                "yamllint: null\n",
             )
-            kit_manifest = load_hardening_manifest(LINT_KIT)
-            expected = _normalize_generated_cmake(generate_hardening_cmake(kit_manifest))
+            kit_manifest = load_hardening_manifest(kit)
+            expected = _normalize_generated_cmake(
+                generate_hardening_cmake(kit_manifest, repo_root=root)
+            )
             (root / "cmake" / "Hardening.cmake").write_text(
                 expected.replace("-Wall", "-Wextra"), encoding="utf-8"
             )
             (root / "cmake" / "CompilerHardeningProbes.cmake").write_text(
-                _normalize_generated_cmake(generate_probes_cmake(kit_manifest)),
+                _normalize_generated_cmake(
+                    generate_probes_cmake(kit_manifest, repo_root=root)
+                ),
                 encoding="utf-8",
             )
-            issues = sync_kit_cmake_regen(root, LINT_KIT, kit_manifest)
+            issues = sync_kit_cmake_regen(root, kit, kit_manifest)
             self.assertTrue(issues, issues)
             self.assertTrue(all(FAIL_ON_CHANGE_TAIL in item for item in issues), issues)
             self.assertEqual(
@@ -2231,7 +2464,7 @@ class LintStepCoverage(unittest.TestCase):
                 expected,
             )
             # Second pass is clean.
-            self.assertEqual(sync_kit_cmake_regen(root, LINT_KIT, kit_manifest), [])
+            self.assertEqual(sync_kit_cmake_regen(root, kit, kit_manifest), [])
 
     def test_kit_generated_cmake_matches_shipped_templates(self) -> None:
         from hardening_verify import (
@@ -2242,10 +2475,19 @@ class LintStepCoverage(unittest.TestCase):
         )
 
         manifest = load_hardening_manifest(LINT_KIT)
-        for name, body in (
-            ("Hardening.cmake", generate_hardening_cmake(manifest)),
-            ("CompilerHardeningProbes.cmake", generate_probes_cmake(manifest)),
-        ):
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            # Shipped kit templates use the full Apache license_header corpus.
+            write_license_only_manifest(license_root)
+            bodies = {
+                "Hardening.cmake": generate_hardening_cmake(
+                    manifest, repo_root=license_root
+                ),
+                "CompilerHardeningProbes.cmake": generate_probes_cmake(
+                    manifest, repo_root=license_root
+                ),
+            }
+        for name, body in bodies.items():
             shipped = (LINT_KIT / "cmake" / name).read_text(encoding="utf-8")
             self.assertEqual(
                 _normalize_generated_cmake(shipped),
@@ -2314,6 +2556,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands: [make fw]\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/us/compile_commands.json\n"
@@ -2355,6 +2598,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands: [make fw]\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/us/compile_commands.json\n"
@@ -2394,6 +2638,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands: [make fw]\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/us/compile_commands.json\n"
@@ -2425,6 +2670,7 @@ class LintStepCoverage(unittest.TestCase):
                 "    disable_everything: [firmware]\n"
                 "compile_db:\n  firmware:\n"
                 "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands: [make fw]\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/us/compile_commands.json\n"
@@ -2492,7 +2738,7 @@ class LintStepCoverage(unittest.TestCase):
             manifest_path,
         )
 
-        self.assertEqual(len(KNOWN_LINT_JOBS_ORDERED), 21)
+        self.assertEqual(len(KNOWN_LINT_JOBS_ORDERED), 22)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -2527,7 +2773,7 @@ class LintStepCoverage(unittest.TestCase):
                 stdout=subprocess.PIPE,
             )
             lines = status.stdout.strip().splitlines()
-            self.assertEqual(lines[0], "2 21")
+            self.assertEqual(lines[0], "2 22")
             self.assertEqual(lines[1], "license format")
 
             empty = dict(partial)
@@ -2856,8 +3102,14 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn(".github/lint-c-cpp.yaml", paths)
         self.assertIn("core/app.c", paths)
 
-    def test_source_scan_matches_uppercase_suffixes_no_bypass(self) -> None:
-        from scan_policy import iter_job_paths, JOB_SOURCE
+    def test_source_scan_covers_all_c_cxx_suffixes_without_case_bypass(self) -> None:
+        from scan_policy import (
+            JOB_CODESPELL,
+            JOB_FORMAT_C,
+            JOB_SOURCE,
+            JOB_UNSAFE_API,
+            iter_job_paths,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2866,11 +3118,36 @@ class LintStepCoverage(unittest.TestCase):
                 "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
                 "  public_headers_dir: include/sample\n  source_roots: [core]\n",
             )
-            write(root / "core/lower.c", "int a;\n")
-            write(root / "core/Upper.C", "int b;\n")
-            write(root / "core/Header.H", "int c;\n")
-            paths = {p.relative_to(root).as_posix() for p in iter_job_paths(root, JOB_SOURCE)}
-        self.assertEqual(paths, {"core/lower.c", "core/Upper.C", "core/Header.H"})
+            names = (
+                "lower.c",
+                "source.cc",
+                "source.cpp",
+                "source.cxx",
+                "Header.H",
+                "header.hh",
+                "header.hpp",
+                "header.hxx",
+                "Upper.CXX",
+            )
+            for name in names:
+                write(root / "core" / name, "int value;\n")
+            expected = {f"core/{name}" for name in names}
+            for job in (JOB_SOURCE, JOB_UNSAFE_API, JOB_FORMAT_C, JOB_CODESPELL):
+                job_paths = iter_job_paths(root, job)
+                paths = {path.relative_to(root).as_posix() for path in job_paths}
+                self.assertTrue(expected <= paths, (job, sorted(expected - paths)))
+            from policy_prepare import prepare_paths
+
+            heap_paths = {
+                path.relative_to(root).as_posix()
+                for path in prepare_paths(
+                    "banned_cxx_heap.py",
+                    root,
+                    iter_job_paths(root, JOB_UNSAFE_API),
+                )
+            }
+            self.assertIn("core/Upper.CXX", heap_paths)
+            self.assertIn("core/header.hxx", heap_paths)
 
     def test_read_paths_file_rejects_out_of_repo_and_absolute(self) -> None:
         from scan_policy import read_paths_file
@@ -3056,14 +3333,14 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn("shellcheck -S warning", ci_text)
         self.assertIn("format_toolchain.sh", (TOOLCHAIN_DIR / "clang_toolchain.sh").read_text(encoding="utf-8"))
         self.assertIn("format_toolchain.sh", (TOOLCHAIN_DIR / "markdownlint_toolchain.sh").read_text(encoding="utf-8"))
-        format_section = 'section "Format C/C++ and shell sources (clang-format, shfmt, shellcheck, codespell)"'
+        format_section = 'section format "Format C/C++, shell, and Python sources (clang-format, shfmt, shellcheck, codespell, ruff, mypy)"'
         self.assertIn(format_section, ci_text)
         self.assertNotIn('section "Fix misspellings (codespell)"', ci_text)
-        openssf_section = 'section "OpenSSF hardening (validate manifest + hardeninglint)"'
-        clang_tidy_section = 'section "Run clang-tidy"'
+        openssf_section = 'section openssf "OpenSSF hardening (validate manifest + hardeninglint)"'
+        clang_tidy_section = 'section clang_tidy "Run clang-tidy"'
         memory_section = (
-            'section "Enforce no C++ new/delete '
-            '(wrapper_files exempt; complements clang-tidy/cppcheck — malloc/free in unsafe-api pass)"'
+            'section banned_cxx_heap "Enforce no C++ new/delete '
+            '(including unsafe wrappers; complements clang-tidy/cppcheck)"'
         )
         assert_section_order(
             self,
@@ -3072,13 +3349,14 @@ class LintStepCoverage(unittest.TestCase):
             "lint_kit_format_toolchain_self_test",
             "shellcheck -S warning",
             'run bash "${toolchain}/codespell.sh"',
+            'section compile_db "Generate compile databases (host configure → merge → OpenSSF audit)"',
             openssf_section,
             clang_tidy_section,
             memory_section,
         )
         self.assertLess(
             ci_text.index(clang_tidy_section),
-            ci_text.index('section "Run cppcheck'),
+            ci_text.index('section cppcheck "Run cppcheck'),
         )
         self.assertNotIn('section "Run manifest build steps"', ci_text)
         self.assertNotIn('section "Firmware:', ci_text)
@@ -3206,7 +3484,7 @@ class LintStepCoverage(unittest.TestCase):
     def test_custom_lints_only_runs_spec_traceability_before_exit(self) -> None:
         script = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
         self.assertIn("spec_traceability_path", script)
-        format_section = 'section "Format C/C++ and shell sources (clang-format, shfmt, shellcheck, codespell)"'
+        format_section = 'section format "Format C/C++, shell, and Python sources (clang-format, shfmt, shellcheck, codespell, ruff, mypy)"'
         assert_section_order(
             self,
             script,
@@ -3214,34 +3492,47 @@ class LintStepCoverage(unittest.TestCase):
             "lint_kit_format_toolchain_self_test",
             "shellcheck -S warning",
             'run bash "${toolchain}/codespell.sh"',
-            'section "OpenSSF hardening (validate manifest + hardeninglint)"',
             'if ((custom_lints_only == 0)); then',
-            'section "Generate compile databases (host configure → merge → OpenSSF audit)"',
-            'section "Run clang-tidy"',
-            'section "Enforce no C++ new/delete (wrapper_files exempt; complements clang-tidy/cppcheck — malloc/free in unsafe-api pass)"',
+            'section compile_db "Generate compile databases (host configure → merge → OpenSSF audit)"',
+            'section openssf "OpenSSF hardening (validate manifest + hardeninglint)"',
+            'section clang_tidy "Run clang-tidy"',
+            'section banned_cxx_heap "Enforce no C++ new/delete (including unsafe wrappers; complements clang-tidy/cppcheck)"',
             "((custom_lints_only == 1))",
-            'section "Run cppcheck (config/cppcheck-manifest.yaml)"',
-            'section "Compile firmware (compile_db.firmware)"',
+            'section cppcheck "Run cppcheck (config/cppcheck-manifest.yaml)"',
+            'section firmware_compile_db "Ensure firmware compile databases (compile_db.firmware)"',
             'ensure-firmware-compile-db',
+            'section firmware_build "Build firmware (firmware_build.commands)"',
+            'run-firmware-build',
         )
         self.assertLess(
-            script.index('section "Verify spec traceability manifest"'),
+            script.index('section spec_traceability "Verify spec traceability manifest"'),
             script.index("((custom_lints_only == 1))"),
         )
         self.assertNotIn('section "Run manifest build steps"', script)
-        self.assertIn('section "Compile firmware (compile_db.firmware)"', script)
+        self.assertIn('section firmware_compile_db "Ensure firmware compile databases (compile_db.firmware)"', script)
         self.assertIn("ensure-firmware-compile-db", script)
+        self.assertIn("run-firmware-build", script)
         self.assertLess(
             script.index("configure-compile-db"),
             script.index('ensure-firmware-compile-db'),
+        )
+        self.assertLess(
+            script.index('ensure-firmware-compile-db'),
+            script.index('run-firmware-build'),
         )
 
     def test_ci_lint_runs_hardening_manifest_and_linter(self) -> None:
         script = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
         self.assertIn("manifest_validate.py", script)
+        self.assertIn("workflow_container_policy.py", script)
+        self.assertIn("verify --workflow", script)
         self.assertIn("policy/hardening_verify.py", script)
         self.assertIn("compile_db/compile_db_lint.py", script)
         self.assertIn("configure-compile-db", script)
+        self.assertLess(
+            script.index("configure-compile-db"),
+            script.rindex("run_python_hardening_verify"),
+        )
         self.assertIn("ensure-firmware-compile-db", script)
         self.assertNotIn('section "Run manifest build steps"', script)
 
@@ -3258,6 +3549,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: build/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands:\n"
                 "        - make idf-build\n"
                 "  userspace:\n"
@@ -3290,6 +3582,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: esp-idf/build/compile_commands.json\n"
+                "      source: esp-idf\n"
                 "      commands:\n"
                 "        - make idf-build\n"
                 "  userspace:\n"
@@ -3307,6 +3600,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: fw/build/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands:\n"
                 "        - make idf-build\n"
                 "  userspace:\n"
@@ -3352,13 +3646,17 @@ class LintStepCoverage(unittest.TestCase):
             self.assertNotIn(f"-{check},", cxx_text)
         self.assertIn("FunctionCase\n    value: lower_case", c_text)
         self.assertIn("TypedefCase\n    value: lower_case", c_text)
+        self.assertIn("TypedefSuffix\n    value: '_t'", c_text)
+        self.assertIn("StructCase\n    value: lower_case", c_text)
+        self.assertIn("UnionCase\n    value: lower_case", c_text)
+        self.assertIn("EnumCase\n    value: lower_case", c_text)
         self.assertIn("EnumConstantCase\n    value: UPPER_CASE", c_text)
         self.assertIn("GlobalConstantCase\n    value: UPPER_CASE", c_text)
         self.assertIn("StaticConstantCase\n    value: UPPER_CASE", c_text)
         self.assertNotIn("GlobalConstantPrefix", c_text)
         self.assertNotIn("StaticConstantPrefix", c_text)
-        self.assertIn("EnumIgnoredRegexp", c_text)
-        self.assertIn("StructIgnoredRegexp", c_text)
+        self.assertNotIn("EnumIgnoredRegexp", c_text)
+        self.assertNotIn("StructIgnoredRegexp", c_text)
         self.assertIn("LocalConstantCase\n    value: lower_case", c_text)
         self.assertNotIn("LocalConstantPrefix", c_text)
         self.assertNotIn("EnumConstantPrefix", c_text)
@@ -3405,7 +3703,8 @@ class LintStepCoverage(unittest.TestCase):
             container_root = Path(tmp) / "src"
             container_root.mkdir()
             bootstrap_scan_manifest(container_root, source_roots=("core", "port", "esp-idf"))
-            host_prefix = "/home/ci/workspace/nero-lifi-ir-fun"
+            # Must not use /src/ or /workspace/ prefixes (those are container remaps).
+            host_prefix = "/opt/foreign-checkout/sample-firmware"
             raw_entry = {
                 "directory": host_prefix,
                 "command": (
@@ -3446,6 +3745,7 @@ class LintStepCoverage(unittest.TestCase):
             write(root / "core/app.c", "void app(void) {}\n")
             write(root / "core/app.h", "#pragma once\nvoid app(void);\n")
             write(root / "userspace/tool.cpp", "void ToolMain() {}\n")
+            write(root / "userspace/bypass.CXX", "void BypassMain() {}\n")
             merge_dir = root / "build" / "clang-tidy-compile-db"
             source_paths = central_job_paths(root, "source")
             unsafe_paths = central_job_paths(root, "unsafe_api")
@@ -3476,7 +3776,10 @@ class LintStepCoverage(unittest.TestCase):
                 for path in helper._sources_for_overlay(sources, overlays[1])
             }
         self.assertEqual(c_files, {"core/app.c"})
-        self.assertEqual(cxx_files, {"userspace/tool.cpp"})
+        self.assertEqual(
+            cxx_files,
+            {"userspace/bypass.CXX", "userspace/tool.cpp"},
+        )
         # Headers stay in compile-DB coverage, not clang-tidy argv.
         self.assertIn(
             "core/app.h",
@@ -3485,6 +3788,37 @@ class LintStepCoverage(unittest.TestCase):
                 for path in helper.clang_tidy_scan_targets(source_paths)
             },
         )
+
+    def test_clang_tidy_batches_support_header_only_projects(self) -> None:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from scan_policy import bootstrap_scan_manifest
+
+        helper = load_helper("compile_db/compile_db_lint.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bootstrap_scan_manifest(root, source_roots=("include",))
+            write(root / "include/sample.h", "#pragma once\nint sample(void);\n")
+            source_paths = central_job_paths(root, "source")
+            unsafe_paths = central_job_paths(root, "unsafe_api")
+            merge_dir = root / "build/clang-tidy-compile-db"
+            self.assertTrue(
+                helper.merge_compile_commands(
+                    root,
+                    merge_dir / "compile_commands.json",
+                    scan_paths=source_paths,
+                )
+            )
+            output = io.StringIO()
+            with redirect_stdout(output), redirect_stderr(output):
+                result = helper.print_clang_tidy_batches(
+                    root,
+                    LINT_KIT,
+                    source_paths=source_paths,
+                    unsafe_api_paths=unsafe_paths,
+                )
+        self.assertEqual(result, 0, output.getvalue())
+        self.assertIn("sample.h", output.getvalue())
 
     def test_hardening_cmake_roots_discovered_from_cmake_lists(self) -> None:
         from consumer_manifest import discover_hardening_cmake_roots
@@ -3551,6 +3885,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: esp-idf/build/compile_commands.json\n"
+                "      source: esp-idf\n"
                 "      commands:\n"
                 "        - make idf-build\n"
                 "  userspace:\n"
@@ -3591,6 +3926,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: custom-fw/build/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands:\n"
                 "        - make firmware-build\n"
                 "  userspace:\n"
@@ -3638,6 +3974,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: fw/build/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands:\n"
                 "        - make idf-build\n"
                 "  userspace:\n"
@@ -3665,6 +4002,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: build/lint/firmware/compile_commands.json\n"
+                "      source: firmware\n"
                 "      commands:\n"
                 "        - make firmware-compile-db\n"
                 "  userspace:\n"
@@ -3684,6 +4022,163 @@ class LintStepCoverage(unittest.TestCase):
             write(root / "userspace/CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(u C)\n")
             self.assertEqual(compile_db_cmake_coverage_issues(root), [])
             self.assertEqual(verify_compile_db_cmake_coverage(root), 0)
+
+    def test_manifest_validate_requires_firmware_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "license_header: |\n  # test\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
+                "  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      commands: [make fw]\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML.replace(
+                    "  resource_lifetime: null\n", "  resource_lifetime: null\n  unsafe_api: null\n"
+                ),
+            )
+            result = subprocess.run(
+                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("compile_db.firmware[0].source is required", result.stderr)
+
+    def test_generate_hardening_flags_mk_language_order_and_libcpp(self) -> None:
+        from hardening_verify import generate_hardening_flags_mk, load_hardening_manifest
+        from policy_overrides import apply_openssf_coverage_flag_overrides
+
+        kit = load_hardening_manifest(LINT_KIT)
+        coverage_flags = list(kit["coverage"]["flags"])
+        dialed = apply_openssf_coverage_flag_overrides(kit, add=None, remove=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            body = generate_hardening_flags_mk(dialed, repo_root=license_root)
+        c_line = next(line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CFLAGS"))
+        cxx_line = next(line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CXXFLAGS"))
+        cpp_line = next(line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CPPFLAGS"))
+        c_flags = c_line.split(":=", 1)[1].strip().split()
+        cxx_flags = cxx_line.split(":=", 1)[1].strip().split()
+        self.assertIn("-Werror=implicit", c_flags)
+        self.assertNotIn("-Werror=implicit", cxx_flags)
+        self.assertLess(
+            c_flags.index("-Wall") if "-Wall" in c_flags else 0,
+            c_flags.index("-Wextra") if "-Wextra" in c_flags else 0,
+        )
+        ordered = [item for item in coverage_flags if item in c_flags]
+        self.assertEqual(
+            [item for item in c_flags if item in coverage_flags],
+            ordered,
+        )
+        defs = cpp_line.split(":=", 1)[1].strip()
+        # Flat Make must not emit mutually exclusive libc++ hardening modes together.
+        self.assertNotIn("_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST", defs)
+        self.assertNotIn("_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE", defs)
+        self.assertNotIn("_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG", defs)
+
+    def test_openssf_audit_honors_provenance_and_preferred_compile_db(self) -> None:
+        from unittest.mock import patch
+
+        if str(COMPILE_DB_DIR) not in sys.path:
+            sys.path.insert(0, str(COMPILE_DB_DIR))
+        sys.path.insert(0, str(HELPERS_DIR / "policy"))
+        import compile_db_util
+        from hardening_verify import verify_compile_commands_openssf
+        from policy_overrides import openssf_override_dials_for_source
+
+        arduino_db = "build/lint/firmware/arduino/compile_commands.json"
+        nucleo_db = "build/lint/firmware/nucleo/compile_commands.json"
+        werror = ("-Werror", "-Werror=format-security")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                f"    - compile_commands_json: {arduino_db}\n      source: firmware\n"
+                f"    - compile_commands_json: {nucleo_db}\n      source: firmware\n"
+                "  userspace: []\n"
+                "policy:\n  overrides:\n    openssf-hardening:\n"
+                "      add: null\n      remove: null\n"
+                "      by_compile_db:\n"
+                f"        - compile_commands_json: {arduino_db}\n"
+                "          add: null\n"
+                "          remove:\n"
+                + "".join(f"            - {flag}\n" for flag in werror)
+                + f"        - compile_commands_json: {nucleo_db}\n"
+                "          add: null\n          remove: null\n",
+            )
+            write(root / "firmware/shared.c", "void shared(void) {}\n")
+            host_flags = (
+                "-Wall -Wextra -Wformat -Wformat=2 -Wconversion -Wsign-conversion "
+                "-Wimplicit-fallthrough -Werror -Werror=format-security "
+                "-fno-delete-null-pointer-checks -fno-strict-overflow -fno-strict-aliasing "
+                "-fstack-protector-strong -Whardened -O2 -fexceptions"
+            )
+            for db in (arduino_db, nucleo_db):
+                path = root / db
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps(
+                        [
+                            {
+                                "directory": str(root),
+                                "command": f"arm-none-eabi-gcc {host_flags} -c {(root / 'firmware/shared.c').resolve()}",
+                                "file": str((root / "firmware/shared.c").resolve()),
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+            entry = {
+                "directory": str(root),
+                "command": f"arm-none-eabi-gcc {host_flags} -c {(root / 'firmware/shared.c').resolve()}",
+                "file": str((root / "firmware/shared.c").resolve()),
+                compile_db_util.PROVENANCE_KEY: [arduino_db, nucleo_db],
+            }
+            add, remove = openssf_override_dials_for_source(
+                root,
+                "firmware/shared.c",
+                preferred_compile_db=arduino_db,
+                provenance=[arduino_db, nucleo_db],
+            )
+            self.assertTrue(remove)
+            self.assertIn("-Werror", remove)
+            _add2, remove2 = openssf_override_dials_for_source(
+                root,
+                "firmware/shared.c",
+                preferred_compile_db=nucleo_db,
+                provenance=[arduino_db, nucleo_db],
+            )
+            self.assertIsNone(remove2)
+
+            def mock_host_triple() -> str:
+                return "x86_64-host"
+
+            def mock_compiler_target(compiler: Path) -> str | None:
+                return "arm-none-eabi" if "arm-none" in compiler.name else "x86_64-host"
+
+            with patch.object(compile_db_util, "host_target_triple", mock_host_triple), patch.object(
+                compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+            ):
+                issues = verify_compile_commands_openssf(
+                    root,
+                    LINT_KIT,
+                    entries_by_key={"firmware/shared.c": entry},
+                    source_paths=[root / "firmware/shared.c"],
+                )
+            self.assertEqual(issues, [], issues)
 
     def test_spec_traceability_path_reads_manifest_field(self) -> None:
         from consumer_manifest import spec_traceability_path
@@ -3936,7 +4431,7 @@ class PolicyLinterSimulations(unittest.TestCase):
             cflags = root / "esp-idf" / "build" / "toolchain" / "cflags"
             cflags.parent.mkdir(parents=True)
             foreign = (
-                "/home/ci-host/checkout/nero-lifi-ir-fun/"
+                "/opt/foreign-checkout/sample-firmware/"
                 "esp-idf/build/specs/picolibc.specs"
             )
             cflags.write_text(
@@ -4240,6 +4735,17 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
                 "  public_headers_dir: include\n"
                 "  source_roots: [firmware, esp-idf, userspace, tests]\n"
+                "compile_db:\n"
+                "  firmware:\n"
+                "    - compile_commands_json: build/lint/firmware/compile_commands.json\n"
+                "      source: firmware\n"
+                "      commands: [make firmware-compile-db]\n"
+                "    - compile_commands_json: esp-idf/build/compile_commands.json\n"
+                "      source: esp-idf\n"
+                "      commands: [make idf-build]\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n"
                 "policy:\n  shared_c_cxx_source_roots: [firmware, tests/firmware]\n",
             )
             roots = firmware_compile_source_roots(root)
@@ -4256,6 +4762,37 @@ class PolicyLinterSimulations(unittest.TestCase):
             self.assertFalse(
                 storage_key_prefers_firmware_compile("tests/firmware/test_x.cpp", root)
             )
+
+    def test_firmware_compile_source_roots_decoupled_from_shared_c_cxx(self) -> None:
+        """Cross-template roots come from firmware source even when shared_c_cxx is null."""
+        if str(COMPILE_DB_DIR) not in sys.path:
+            sys.path.insert(0, str(COMPILE_DB_DIR))
+        from consumer_manifest import firmware_compile_source_roots, shared_c_cxx_source_roots
+        from compile_db_util import storage_key_prefers_firmware_compile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include\n"
+                "  source_roots: [firmware, userspace, tests]\n"
+                "compile_db:\n"
+                "  firmware:\n"
+                "    - compile_commands_json: build/lint/firmware/uno/compile_commands.json\n"
+                "      source: firmware\n"
+                "      commands: [make uno-db]\n"
+                "    - compile_commands_json: build/lint/firmware/wba/compile_commands.json\n"
+                "      source: firmware\n"
+                "      commands: [make wba-db]\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  shared_c_cxx_source_roots: null\n",
+            )
+            self.assertEqual(shared_c_cxx_source_roots(root), ())
+            self.assertEqual(firmware_compile_source_roots(root), ("firmware",))
+            self.assertTrue(storage_key_prefers_firmware_compile("firmware/src/x.c", root))
 
     def test_shared_c_cxx_overlay_partitions_host_and_interop_cpp(self) -> None:
         from consumer_manifest import clang_tidy_overlays
@@ -4302,6 +4839,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "compile_db:\n"
                 "  firmware:\n"
                 "    - compile_commands_json: esp-idf/build/compile_commands.json\n"
+                "      source: esp-idf\n"
                 "  userspace:\n"
                 "    - compile_commands_json: build/lint/tests/compile_commands.json\n"
                 "      source: tests\n",
@@ -4324,6 +4862,22 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "-fstack-protector-strong -fhardened -fcf-protection=full -O2 -fexceptions"
             )
             cross_flags = host_flags.replace("-fhardened", "-Whardened")
+            esp_db = root / "esp-idf/build/compile_commands.json"
+            esp_db.write_text(
+                json.dumps(
+                    [
+                        {
+                            "directory": str(root),
+                            "command": (
+                                f"/opt/riscv32-esp-elf-gcc {cross_flags} -c "
+                                f"{root / 'esp-idf/main/app_main.c'}"
+                            ),
+                            "file": str((root / "esp-idf/main/app_main.c").resolve()),
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
             entries = {
                 "core/app.c": {
                     "directory": str(root),
@@ -4453,9 +5007,9 @@ class PolicyLinterSimulations(unittest.TestCase):
             targets = {path.relative_to(root).as_posix() for path in helper.clang_tidy_scan_targets(unsafe_paths)}
             enforced = {path.relative_to(root).as_posix() for path in unsafe_paths}
         self.assertEqual(targets, enforced)
-        self.assertNotIn("include/sample/mem_util.h", targets)
+        self.assertIn("include/sample/mem_util.h", targets)
 
-    def test_scan_job_profiles_exclude_wrappers_only_for_unsafe_api(self) -> None:
+    def test_unsafe_scan_keeps_wrappers_for_nonwaivable_checks(self) -> None:
         from scan_policy import JOB_SOURCE, JOB_UNSAFE_API
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -4466,7 +5020,7 @@ class PolicyLinterSimulations(unittest.TestCase):
             full = {p.relative_to(root).as_posix() for p in central_job_paths(root, JOB_SOURCE)}
             strict = {p.relative_to(root).as_posix() for p in central_job_paths(root, JOB_UNSAFE_API)}
         self.assertIn("include/sample/mem_util.h", full)
-        self.assertNotIn("include/sample/mem_util.h", strict)
+        self.assertIn("include/sample/mem_util.h", strict)
         self.assertIn("core/app.c", strict)
 
     def test_duplicate_definitions_flags_header_exposed_shadow_constant(self) -> None:
@@ -4698,7 +5252,10 @@ class PolicyLinterSimulations(unittest.TestCase):
             root = Path(tmp)
             write_policy_test_manifest(root)
             write(root / "userspace/bad.c", "void f(void) { FILE *fp = fopen\n(\"x\", \"r\"); fclose(fp); }\n")
-            write(root / "userspace/sample_file_raii.h", "void f(void) { FILE *fp = fopen(\"x\", \"r\"); fclose(fp); }\n")
+            write(
+                root / "include/sample/sample_file_raii.h",
+                "void f(void) { FILE *fp = fopen(\"x\", \"r\"); fclose(fp); }\n",
+            )
             reported = reported_basenames(
                 policy_lint("raii_lifetime.py", root, "unsafe_api")
             )
@@ -4885,6 +5442,398 @@ class PolicyLinterSimulations(unittest.TestCase):
         assert_simulation_reported(
             self, reported, violations=violations, clean=["sample_file_raii.h", "malloc_ok.c"]
         )
+
+    def test_firmware_compile_db_source_required_and_accepted(self) -> None:
+        from manifest_validate import validate_compile_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / ".github/lint-c-cpp.yaml"
+            write(
+                missing,
+                "license_header: |\n  # test\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include\n  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      commands: [make fw]\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/us/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML,
+            )
+            import yaml as _yaml
+
+            data = _yaml.safe_load(missing.read_text(encoding="utf-8"))
+            issues = validate_compile_db(data, missing)
+            self.assertTrue(any(".source is required" in item for item in issues), issues)
+
+            write(
+                missing,
+                "license_header: |\n  # test\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include\n  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      commands: [make fw]\n"
+                "      source: firmware\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/us/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML,
+            )
+            data = _yaml.safe_load(missing.read_text(encoding="utf-8"))
+            issues = validate_compile_db(data, missing)
+            self.assertFalse(any("firmware" in item and "source" in item for item in issues), issues)
+
+        from consumer_manifest import compile_db_firmware_entries
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include\n  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                "    - compile_commands_json: build/fw/compile_commands.json\n"
+                "      commands: [make fw]\n"
+                "      source: firmware\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/us/compile_commands.json\n"
+                "      source: userspace\n",
+            )
+            entries = compile_db_firmware_entries(root)
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["source"], "firmware")
+
+    def test_duplicate_source_compile_db_provenance_preserved(self) -> None:
+        if str(COMPILE_DB_DIR) not in sys.path:
+            sys.path.insert(0, str(COMPILE_DB_DIR))
+        import json
+
+        from compile_db_util import (
+            PROVENANCE_KEY,
+            entry_compile_db_provenance,
+            load_compile_entries_by_db,
+            load_richest_compile_entries,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include\n  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                "    - compile_commands_json: build/lint/firmware/uno/compile_commands.json\n"
+                "      source: firmware\n"
+                "      commands: [make uno]\n"
+                "    - compile_commands_json: build/lint/firmware/wba/compile_commands.json\n"
+                "      source: firmware\n"
+                "      commands: [make wba]\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n",
+            )
+            src = root / "firmware/shared.c"
+            write(src, "void shared(void) {}\n")
+            uno = root / "build/lint/firmware/uno/compile_commands.json"
+            wba = root / "build/lint/firmware/wba/compile_commands.json"
+            for db_path, compiler in (
+                (uno, "/opt/arm-uno-gcc"),
+                (wba, "/opt/arm-wba-gcc"),
+            ):
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                db_path.write_text(
+                    json.dumps(
+                        [
+                            {
+                                "directory": str(root),
+                                "command": f"{compiler} -c {src.resolve()}",
+                                "file": str(src.resolve()),
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+            by_db = load_compile_entries_by_db(root)
+            self.assertIn("build/lint/firmware/uno/compile_commands.json", by_db)
+            self.assertIn("build/lint/firmware/wba/compile_commands.json", by_db)
+            self.assertIn("firmware/shared.c", by_db["build/lint/firmware/uno/compile_commands.json"])
+            self.assertIn("firmware/shared.c", by_db["build/lint/firmware/wba/compile_commands.json"])
+            richest = load_richest_compile_entries(root)
+            prov = entry_compile_db_provenance(richest["firmware/shared.c"])
+            self.assertEqual(
+                set(prov),
+                {
+                    "build/lint/firmware/uno/compile_commands.json",
+                    "build/lint/firmware/wba/compile_commands.json",
+                },
+            )
+            self.assertEqual(richest["firmware/shared.c"][PROVENANCE_KEY], prov)
+
+            # Emit contract matches pre-0.2.0: clang/cppcheck JSON has only public keys.
+            # Provenance stays on in-memory merge entries for override/OpenSSF ownership.
+            from compile_db_lint import (
+                MergedCompileDatabase,
+                _compile_db_provenance_for_source,
+                scrub_compile_entry_for_clang_tidy,
+                write_clang_tidy_compile_commands,
+            )
+            from compile_db_util import public_compile_entry
+
+            in_memory = richest["firmware/shared.c"]
+            self.assertIn(PROVENANCE_KEY, in_memory)
+            scrubbed = scrub_compile_entry_for_clang_tidy(in_memory)
+            self.assertNotIn(PROVENANCE_KEY, scrubbed)
+            self.assertTrue(set(scrubbed.keys()) <= {"directory", "file", "command", "arguments", "output"})
+            self.assertEqual(public_compile_entry(in_memory), scrubbed)
+            # In-memory provenance must survive scrub (scrub copies).
+            self.assertIn(PROVENANCE_KEY, in_memory)
+
+            merge_dir = root / "build/clang-tidy-compile-db"
+            merge_dir.mkdir(parents=True, exist_ok=True)
+            db = MergedCompileDatabase(
+                root.resolve(),
+                richest,
+                MergedCompileDatabase.host_template_pool(richest, root.resolve()),
+            )
+            write_clang_tidy_compile_commands(
+                db, merge_dir / "compile_commands.json", scan_paths=[src]
+            )
+            written = json.loads(
+                (merge_dir / "compile_commands.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(written), 1)
+            self.assertNotIn(PROVENANCE_KEY, written[0])
+            for key in written[0]:
+                self.assertIn(key, {"directory", "file", "command", "arguments", "output"})
+            self.assertEqual(
+                set(
+                    _compile_db_provenance_for_source(
+                        root,
+                        "firmware/shared.c",
+                        written[0],
+                    )
+                ),
+                {
+                    "build/lint/firmware/uno/compile_commands.json",
+                    "build/lint/firmware/wba/compile_commands.json",
+                },
+            )
+            # Memory model unchanged after write.
+            self.assertEqual(
+                entry_compile_db_provenance(db.by_key["firmware/shared.c"]),
+                prov,
+            )
+
+    def test_openssf_audits_each_firmware_db_separately(self) -> None:
+        from unittest.mock import patch
+        import json
+
+        if str(COMPILE_DB_DIR) not in sys.path:
+            sys.path.insert(0, str(COMPILE_DB_DIR))
+        _policy = HELPERS_DIR / "policy"
+        if str(_policy) not in sys.path:
+            sys.path.insert(0, str(_policy))
+        import compile_db_util
+        from hardening_verify import verify_compile_commands_openssf
+        from policy_overrides import openssf_manifest_for_audit, override_dials_for_compile_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uno_json = "build/lint/firmware/uno/compile_commands.json"
+            wba_json = "build/lint/firmware/wba/compile_commands.json"
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include\n  source_roots: [firmware]\n"
+                "compile_db:\n  firmware:\n"
+                f"    - compile_commands_json: {uno_json}\n"
+                "      source: firmware\n"
+                "      commands: [make uno]\n"
+                f"    - compile_commands_json: {wba_json}\n"
+                "      source: firmware\n"
+                "      commands: [make wba]\n"
+                "  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                "  nolint_allowed: null\n  resource_lifetime: null\n"
+                "  shared_c_cxx_source_roots: null\n"
+                "  unsafe_api:\n    header: sample_null.h\n"
+                "    include_headers: [attrs.h]\n"
+                "    wrapper_files: [include/sample_null.h]\n"
+                "  overrides:\n"
+                "    clang-format: {add: null, remove: null, by_compile_db: null}\n"
+                "    clang-tidy-c: {add: null, remove: null, by_compile_db: null}\n"
+                "    clang-tidy-cxx: {add: null, remove: null, by_compile_db: null}\n"
+                "    clang-tidy-shared-c-cxx: {add: null, remove: null, by_compile_db: null}\n"
+                "    clang-tidy-unsafe-c: {add: null, remove: null, by_compile_db: null}\n"
+                "    clang-tidy-unsafe-cxx: {add: null, remove: null, by_compile_db: null}\n"
+                "    cppcheck: {add: null, remove: null, by_compile_db: null}\n"
+                "    openssf-hardening:\n"
+                "      add: null\n"
+                "      remove: null\n"
+                "      by_compile_db:\n"
+                f"        - compile_commands_json: {uno_json}\n"
+                "          add: null\n"
+                "          remove: [-Werror]\n"
+                f"        - compile_commands_json: {wba_json}\n"
+                "          add: null\n"
+                "          remove: [-Wall]\n",
+            )
+            src = root / "firmware/shared.c"
+            write(src, "void shared(void) {}\n")
+            base_flags = (
+                "-Wall -Wextra -Wformat -Wformat=2 -Wconversion -Wsign-conversion "
+                "-Wimplicit-fallthrough -Werror -Werror=format-security "
+                "-fno-delete-null-pointer-checks -fno-strict-overflow -fno-strict-aliasing "
+                "-fstack-protector-strong -Whardened -O2 -fexceptions"
+            )
+            for rel, compiler in (
+                (uno_json, "/opt/arm-uno-gcc"),
+                (wba_json, "/opt/arm-wba-gcc"),
+            ):
+                db_path = root / rel
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                db_path.write_text(
+                    json.dumps(
+                        [
+                            {
+                                "directory": str(root),
+                                "command": f"{compiler} {base_flags} -c {src.resolve()}",
+                                "file": str(src.resolve()),
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                (db_path.parent / "CMakeCache.txt").write_text(
+                    "# no HAVE_* probes\n", encoding="utf-8"
+                )
+
+            _add, uno_remove = override_dials_for_compile_db(
+                root, "openssf-hardening", uno_json
+            )
+            _add, wba_remove = override_dials_for_compile_db(
+                root, "openssf-hardening", wba_json
+            )
+            self.assertIn("-Werror", uno_remove or ())
+            self.assertIn("-Wall", wba_remove or ())
+            self.assertNotEqual(uno_remove, wba_remove)
+
+            kit = LINT_KIT
+            kit_manifest = __import__(
+                "hardening_verify", fromlist=["load_hardening_manifest"]
+            ).load_hardening_manifest(kit)
+            uno_manifest = openssf_manifest_for_audit(
+                root, kit_manifest, lookup_key="firmware/shared.c", preferred_compile_db=uno_json
+            )
+            wba_manifest = openssf_manifest_for_audit(
+                root, kit_manifest, lookup_key="firmware/shared.c", preferred_compile_db=wba_json
+            )
+            uno_flags = {
+                str(item) for item in uno_manifest.get("coverage", {}).get("flags", [])
+            }
+            wba_flags = {
+                str(item) for item in wba_manifest.get("coverage", {}).get("flags", [])
+            }
+            self.assertNotIn("-Werror", uno_flags)
+            self.assertIn("-Wall", uno_flags)
+            self.assertNotIn("-Wall", wba_flags)
+            self.assertIn("-Werror", wba_flags)
+
+            def mock_host_triple() -> str:
+                return "x86_64-host"
+
+            with patch.object(compile_db_util, "host_target_triple", mock_host_triple):
+                with patch.object(
+                    compile_db_util,
+                    "clang_target_for_command",
+                    side_effect=lambda cmd: (
+                        "arm-uno" if "uno-gcc" in cmd else "arm-wba" if "wba-gcc" in cmd else "x86_64-host"
+                    ),
+                ):
+                    issues = verify_compile_commands_openssf(
+                        root,
+                        kit,
+                        entries_by_key={},
+                        source_paths=[src],
+                    )
+            # UNO dials out -Werror (present in command); WBA dials out -Wall (present).
+            # Both should pass their own dialed requirements.
+            self.assertEqual(issues, [], issues)
+            # Remove a non-waived WBA requirement to prove that profile is
+            # audited independently and identified in the failure.
+            wba_path = root / wba_json
+            wba_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "directory": str(root),
+                            "command": (
+                                f"/opt/arm-wba-gcc {base_flags.replace('-Wextra ', '')} "
+                                f"-c {src.resolve()}"
+                            ),
+                            "file": str(src.resolve()),
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(compile_db_util, "host_target_triple", mock_host_triple):
+                with patch.object(
+                    compile_db_util,
+                    "clang_target_for_command",
+                    side_effect=lambda cmd: (
+                        "arm-uno" if "uno-gcc" in cmd else "arm-wba" if "wba-gcc" in cmd else "x86_64-host"
+                    ),
+                ):
+                    issues = verify_compile_commands_openssf(
+                        root,
+                        kit,
+                        entries_by_key={},
+                        source_paths=[src],
+                    )
+            labeled = " ".join(issues)
+            self.assertIn(f"[{wba_json}]", labeled)
+            self.assertIn("-Wextra", labeled)
+            self.assertNotIn(f"[{uno_json}]", labeled)
+
+    def test_hardening_flags_mk_preserves_order_and_language_split(self) -> None:
+        from hardening_verify import (
+            generate_hardening_flags_mk,
+            load_hardening_manifest,
+            _ordered_language_coverage_flags,
+            _ordered_make_definitions,
+        )
+
+        manifest = load_hardening_manifest(LINT_KIT)
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            body = generate_hardening_flags_mk(manifest, repo_root=license_root)
+        c_flags = _ordered_language_coverage_flags(manifest, "C")
+        cxx_flags = _ordered_language_coverage_flags(manifest, "CXX")
+        self.assertIn("NERO_OPENSSF_CFLAGS := " + " ".join(c_flags), body)
+        self.assertIn("NERO_OPENSSF_CXXFLAGS := " + " ".join(cxx_flags), body)
+        # C-only flags must not appear on CXXFLAGS; CXX-only defs handling below.
+        self.assertIn("-Werror=implicit", c_flags)
+        self.assertNotIn("-Werror=implicit", cxx_flags)
+        # Order matches coverage.flags, not lexicographic sort.
+        coverage_flags = [
+            str(item) for item in manifest.get("coverage", {}).get("flags", []) if item
+        ]
+        c_positions = [coverage_flags.index(flag) for flag in c_flags if flag in coverage_flags]
+        self.assertEqual(c_positions, sorted(c_positions))
+        # Mutually exclusive libc++ modes must not all be emitted together.
+        defs = _ordered_make_definitions(manifest)
+        libcpp = [item for item in defs if item.startswith("_LIBCPP_HARDENING_MODE=")]
+        self.assertEqual(libcpp, [])
+        self.assertNotIn("_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST", body)
+        self.assertNotIn("_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE", body)
+        self.assertNotIn("_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG", body)
 
 
 if __name__ == "__main__":

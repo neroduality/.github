@@ -14,39 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Minimum host lint tool versions for the org C/C++ lint kit.
+# Org lint kit ruff config for consumer Python (helper/build/test scripts).
+# Applied explicitly by the python_lint job (ruff check --config <kit>/config/ruff.toml),
+# so a consumer's own pyproject.toml never changes the enforced rule set.
 
-tools:
-  clang_format:
-    binaries:
-      - clang-format
-      - clang-format-20
-      - clang-format-21
-    min: "20.0.0"
-  clang_tidy:
-    binaries:
-      - clang-tidy
-      - clang-tidy-21
-    min: "21.0.0"
-  cmake:
-    min: "3.20"
-  codespell:
-    min: "2.4.2"
-  cppcheck:
-    min: "2.19.1"
-  markdownlint:
-    min: "0.48.0"
-  make:
-    min: "4.0"
-  mypy:
-    min: "1.15.0"
-  node:
-    min: 20
-  python3:
-    min: "3.10"
-  ruff:
-    min: "0.14.2"
-  shellcheck:
-    min: "0.9.0"
-  shfmt:
-    min: "3.0.0"
+target-version = "py311"
+line-length = 100
+extend-exclude = ["build", "third-party"]
+
+[lint]
+# High-signal correctness + modernization; excludes opinionated/formatter-adjacent
+# families (COM trailing-comma, pathlib migration) to stay low-noise.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "PIE"]

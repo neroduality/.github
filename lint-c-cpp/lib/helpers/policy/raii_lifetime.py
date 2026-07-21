@@ -32,6 +32,8 @@ LINT_FIX_HINT = "Use project RAII wrappers for acquire/release pairs."
 def scan_text(path: Path, code: str, pairs: tuple[RaiiPair, ...]) -> list[str]:
     issues: list[str] = []
     for pair in pairs:
+        if path.resolve() in pair.canonical_files:
+            continue
         for rx in pair.acquire_rx:
             for match in rx.finditer(code):
                 if is_preprocessor_at(code, match.start()):
@@ -86,17 +88,17 @@ def prepare_self_test_repo(root: Path) -> None:
         "  source_roots: [userspace]\n"
         "policy:\n  resource_lifetime:\n    pairs:\n"
         "      - label: glob/globfree\n        acquire: [\"\\\\bglob\\\\s*\\\\(\"]\n        release: [\"\\\\bglobfree\\\\s*\\\\(\"]\n"
-        "        canonical_files: [sample_glob_raii.h]\n        hint: GlobResult (sample_glob_raii.h)\n"
+        "        canonical_files: [userspace/app/sample_glob_raii.h]\n        hint: GlobResult (sample_glob_raii.h)\n"
         "      - label: fopen/fclose\n        acquire: [\"\\\\bfopen\\\\s*\\\\(\"]\n        release: [\"\\\\bfclose\\\\s*\\\\(\"]\n"
-        "        canonical_files: [sample_file_raii.h]\n        hint: FileHandle (sample_file_raii.h)\n"
+        "        canonical_files: [userspace/app/sample_file_raii.h]\n        hint: FileHandle (sample_file_raii.h)\n"
         "      - label: opendir/closedir\n        acquire: [\"\\\\bopendir\\\\s*\\\\(\"]\n        release: [\"\\\\bclosedir\\\\s*\\\\(\"]\n"
-        "        canonical_files: [sample_dir_raii.h]\n        hint: DirHandle (sample_dir_raii.h)\n"
+        "        canonical_files: [userspace/app/sample_dir_raii.h]\n        hint: DirHandle (sample_dir_raii.h)\n"
         "      - label: dlopen/dlclose\n        acquire: [\"\\\\bdlopen\\\\s*\\\\(\"]\n        release: [\"\\\\bdlclose\\\\s*\\\\(\"]\n"
-        "        canonical_files: [sample_dl_raii.h]\n        hint: DlHandle (sample_dl_raii.h)\n"
+        "        canonical_files: [userspace/app/sample_dl_raii.h]\n        hint: DlHandle (sample_dl_raii.h)\n"
         "      - label: open/close (fd)\n        acquire: [\"(?<![:\\\\w])open\\\\s*\\\\([^;)]*,\\\\s*O_[A-Z_]\"]\n        release: [\"\\\\bclose\\\\s*\\\\(\\\\s*[^)\\\\s]\"]\n"
-        "        canonical_files: [sample_serial.cpp]\n        hint: serial_open helpers (sample_serial.cpp)\n"
+        "        canonical_files: [userspace/app/sample_serial.cpp]\n        hint: serial_open helpers (sample_serial.cpp)\n"
         "      - label: SCardEstablishContext/SCardReleaseContext\n        acquire: [\"\\\\bSCardEstablishContext\\\\s*\\\\(\"]\n        release: [\"\\\\bSCardReleaseContext\\\\s*\\\\(\"]\n"
-        "        canonical_files: [sample_pcsc_connect.cpp]\n        hint: PcscCard (sample_pcsc_connect.cpp)\n"
+        "        canonical_files: [userspace/app/sample_pcsc_connect.cpp]\n        hint: PcscCard (sample_pcsc_connect.cpp)\n"
         "  unsafe_api:\n    wrapper_files:\n"
         f"      - userspace/app/{glob_canonical}\n      - userspace/app/{file_canonical}\n"
         f"      - userspace/app/{dir_canonical}\n      - userspace/app/{dl_canonical}\n"
@@ -111,6 +113,12 @@ def prepare_self_test_repo(root: Path) -> None:
     (app / dl_canonical).write_text("class DlHandle{~DlHandle(){if(h_)dlclose(h_);} void*open(const char*p,int f){return h_=dlopen(p,f);} void*h_;};\n", encoding="utf-8")
     (app / pcsc_canonical).write_text("void list_readers_impl(){ SCARDCONTEXT ctx{}; SCardEstablishContext(0,0,0,&ctx); SCardReleaseContext(ctx); }\n", encoding="utf-8")
     (app / serial_canonical).write_text("int serial_open(const char*p){ int fd=open(p,O_RDONLY); if(fd<0)return fd; close(fd); return fd; }\n", encoding="utf-8")
+    duplicate = app / "duplicate"
+    duplicate.mkdir()
+    (duplicate / glob_canonical).write_text(
+        'void f(){ glob_t g{}; glob("*",0,0,&g); globfree(&g); }\n',
+        encoding="utf-8",
+    )
     for name, (content, _) in cases.items():
         (app / name).write_text(content, encoding="utf-8")
     prepare_self_test_repo._cases = cases  # type: ignore[attr-defined]
@@ -126,5 +134,8 @@ def verify_self_test(errors: list[str]) -> int:
         if not expected and name in reported:
             print(f"self-test false positive: {name}", file=sys.stderr)
             return 1
+    if not any("/duplicate/sample_glob_raii.h:" in err for err in errors):
+        print("self-test miss: canonical basename must not exempt another path", file=sys.stderr)
+        return 1
     print("resource lifetime self-test: OK")
     return 0

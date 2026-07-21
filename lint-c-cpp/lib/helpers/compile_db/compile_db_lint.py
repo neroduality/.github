@@ -114,7 +114,10 @@ CLANG_TIDY_INPUT_SUFFIXES = frozenset({".c", ".cpp", ".cc", ".cxx"})
 
 def clang_tidy_input_targets(scan_paths: list[Path]) -> list[Path]:
     """Sorted paths passed as clang-tidy argv (TUs only; headers via HeaderFilterRegex)."""
-    return sorted(path for path in scan_paths if path.suffix in CLANG_TIDY_INPUT_SUFFIXES)
+    return sorted(
+        path for path in scan_paths
+        if path.suffix.lower() in CLANG_TIDY_INPUT_SUFFIXES
+    )
 
 
 def _rewrite_missing_abs_path(path_str: str, response_file: Path) -> str:
@@ -445,6 +448,8 @@ def _compile_entry_for_cppcheck(
     db: MergedCompileDatabase,
     include_dirs: list[str],
 ) -> dict | None:
+    from compile_db_util import public_compile_entry
+
     entry = db.entry_for(target)
     if entry is None:
         return None
@@ -459,8 +464,28 @@ def _compile_entry_for_cppcheck(
                 synthesized["command"] = shlex.join(
                     [tokens[0], *define_flags, *tokens[1:]]
                 )
-        return synthesized
-    return dict(entry)
+        return public_compile_entry(synthesized)
+    return public_compile_entry(dict(entry))
+
+
+def run_firmware_build(repo_root: Path) -> int:
+    """Run top-level ``firmware_build.commands`` (full firmware builds; last lint job)."""
+    from consumer_manifest import firmware_build_commands
+
+    repo_root = repo_root.resolve()
+    commands = firmware_build_commands(repo_root)
+    if not commands:
+        print(
+            "error: firmware_build has no commands; set firmware_build.commands in the manifest",
+            file=sys.stderr,
+        )
+        return 1
+    for cmd in commands:
+        print(f"+ {cmd}", flush=True)
+        if subprocess.run(cmd, cwd=repo_root, shell=True, check=False).returncode != 0:
+            return 1
+    print(f"firmware_build: OK ({len(commands)} command(s))", flush=True)
+    return 0
 
 
 def ensure_firmware_compile_commands(repo_root: Path) -> int:
@@ -636,7 +661,7 @@ def complete_compile_commands_for_scan_roots(
     return synthesized
 
 
-CXX_SOURCE_SUFFIXES = frozenset({".cpp", ".hpp", ".cc", ".cxx"})
+CXX_SOURCE_SUFFIXES = frozenset({".cpp", ".hpp", ".cc", ".cxx", ".hh", ".hxx"})
 
 
 def _overlay_source_suffixes(overlay: dict) -> frozenset[str] | None:
@@ -670,7 +695,7 @@ def _sources_for_overlay(sources: list[Path], overlay: dict, repo_root: Path | N
     exclude = _overlay_path_prefixes(overlay, "exclude_paths")
     selected: list[Path] = []
     for path in sources:
-        if allowed is not None and path.suffix not in allowed:
+        if allowed is not None and path.suffix.lower() not in allowed:
             continue
         if include or exclude:
             rel = source_key(path, repo_root.resolve()) if repo_root is not None else None
@@ -995,6 +1020,23 @@ def _cppcheck_paths_for_pass(
     raise ValueError(f"unsupported cppcheck pass scan_job {scan_job!r}")
 
 
+def _compile_db_provenance_for_source(
+    repo_root: Path,
+    lookup_key: str | None,
+    entry: dict | None,
+) -> list[str]:
+    """Recover all source DB owners across the public JSON serialization boundary."""
+    if not lookup_key:
+        return []
+    from compile_db_util import entry_compile_db_provenance
+    from policy_overrides import compile_commands_jsons_covering_source
+
+    provenance = entry_compile_db_provenance(entry)
+    if provenance:
+        return provenance
+    return compile_commands_jsons_covering_source(repo_root, lookup_key)
+
+
 def run_cppcheck(
     repo_root: Path,
     lint_kit: Path,
@@ -1057,10 +1099,20 @@ def run_cppcheck(
         targets = clang_tidy_scan_targets(pass_paths)
         if not split_by_db:
             print(f"cppcheck ({pass_id}): {len(targets)} file(s)", flush=True)
+            pass_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", pass_id).strip("-") or "pass"
+            project_json = merge_dir / f"cppcheck.{pass_slug}.compile_commands.json"
+            subset = [
+                db.by_key[key]
+                for path in targets
+                if (key := source_key(path, repo_root)) is not None and key in db.by_key
+            ]
+            project_json.write_text(
+                json.dumps(subset, indent=2) + "\n", encoding="utf-8"
+            )
             common = cppcheck_cli_common_args(
                 cfg, lint_kit=lint_kit, pass_cfg=pass_cfg, repo_root=repo_root
             )
-            cmd = ["cppcheck", f"-j{jobs}", *common, f"--project={cppcheck_json}"]
+            cmd = ["cppcheck", f"-j{jobs}", *common, f"--project={project_json}"]
             print("+", " ".join(cmd), flush=True)
             if subprocess.run(cmd, cwd=repo_root, check=False).returncode != 0:
                 failures += 1
@@ -1068,7 +1120,22 @@ def run_cppcheck(
         groups: dict[str | None, list[Path]] = {}
         for path in targets:
             key = source_key(path, repo_root)
-            owner = owning_compile_commands_json(repo_root, key) if key else None
+            provenance = _compile_db_provenance_for_source(
+                repo_root,
+                key,
+                db.by_key.get(key) if key else None,
+            )
+            if len(provenance) > 1:
+                for owner in provenance:
+                    groups.setdefault(owner, []).append(path)
+                continue
+            owner = (
+                owning_compile_commands_json(
+                    repo_root, key, provenance=provenance or None
+                )
+                if key
+                else None
+            )
             groups.setdefault(owner, []).append(path)
         base_enable = [str(item) for item in cfg.get("enable", []) if isinstance(item, str)]
         base_suppress = [
@@ -1087,21 +1154,17 @@ def run_cppcheck(
             for suppression in suppressions:
                 if suppression.strip():
                     common.append(f"--suppress={suppression}")
-            if owner is None:
-                project_json = cppcheck_json
-                label = pass_id
-            else:
-                slug = compile_db_override_slug(owner)
-                project_json = merge_dir / f"cppcheck.by-{slug}.compile_commands.json"
-                subset = [
-                    db.by_key[key]
-                    for path in group
-                    if (key := source_key(path, repo_root)) is not None and key in db.by_key
-                ]
-                project_json.write_text(
-                    json.dumps(subset, indent=2) + "\n", encoding="utf-8"
-                )
-                label = f"{pass_id}:{owner}"
+            slug = compile_db_override_slug(owner) if owner is not None else "unowned"
+            project_json = merge_dir / f"cppcheck.by-{slug}.compile_commands.json"
+            subset = [
+                db.by_key[key]
+                for path in group
+                if (key := source_key(path, repo_root)) is not None and key in db.by_key
+            ]
+            project_json.write_text(
+                json.dumps(subset, indent=2) + "\n", encoding="utf-8"
+            )
+            label = pass_id if owner is None else f"{pass_id}:{owner}"
             print(f"cppcheck ({label}): {len(group)} file(s)", flush=True)
             cmd = ["cppcheck", f"-j{jobs}", *common, f"--project={project_json}"]
             print("+", " ".join(cmd), flush=True)
@@ -1436,6 +1499,8 @@ def _scrub_cross_compile_command(command: str, *, source_file: str) -> str:
 
 
 def scrub_compile_entry_for_clang_tidy(entry: dict) -> dict:
+    from compile_db_util import public_compile_entry
+
     normalized = dict(entry)
     source_file = str(normalized.get("file", ""))
     command = entry_command(normalized)
@@ -1445,8 +1510,8 @@ def scrub_compile_entry_for_clang_tidy(entry: dict) -> dict:
             # Prefer argv form so -D values with spaces/quotes are not re-shell-parsed.
             normalized["arguments"] = argv
             normalized.pop("command", None)
-            return normalized
-        return normalized
+            return public_compile_entry(normalized)
+        return public_compile_entry(normalized)
 
     if "command" in normalized and isinstance(normalized["command"], str):
         cmd = normalized["command"]
@@ -1474,8 +1539,7 @@ def scrub_compile_entry_for_clang_tidy(entry: dict) -> dict:
                 continue
             out_args.append(arg)
         normalized["arguments"] = out_args
-    return normalized
-
+    return public_compile_entry(normalized)
 
 def _ensure_firmware_compile_commands_if_missing(repo_root: Path) -> int:
     """Build firmware compile_commands.json only when manifest paths are absent."""
@@ -1575,7 +1639,9 @@ def write_clang_tidy_compile_commands(
         ):
             scrubbed["command"] = cmd + " " + " ".join(extra)
             scrubbed.pop("arguments", None)
-        merged.append(scrubbed)
+        from compile_db_util import public_compile_entry
+
+        merged.append(public_compile_entry(scrubbed))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
@@ -1664,6 +1730,7 @@ def _emit_clang_tidy_pass_batches(
     print(f"clang-tidy ({label}): {len(sources)} source file(s)", file=sys.stderr)
     from policy_overrides import (
         OVERRIDE_KEY_BY_CLANG_TIDY_CONFIG,
+        compile_commands_jsons_covering_source,
         compile_db_override_slug,
         config_has_by_compile_db,
         materialize_clang_tidy_config_for_compile_db,
@@ -1700,7 +1767,20 @@ def _emit_clang_tidy_pass_batches(
         groups: dict[str | None, list[Path]] = {}
         for path in overlay_sources:
             key = source_key(path, repo_root)
-            owner = owning_compile_commands_json(repo_root, key) if key else None
+            containing = (
+                compile_commands_jsons_covering_source(repo_root, key) if key else []
+            )
+            if len(containing) > 1:
+                for owner in containing:
+                    groups.setdefault(owner, []).append(path)
+                continue
+            owner = (
+                owning_compile_commands_json(
+                    repo_root, key, provenance=containing or None
+                )
+                if key
+                else None
+            )
             groups.setdefault(owner, []).append(path)
         base_config = str(overlay.get("base_config", config_name))
         kit_text = (lint_kit / "config" / base_config).read_text(encoding="utf-8")
@@ -1903,12 +1983,14 @@ def print_clang_tidy_batches(
         source_overlays + unsafe_overlays,
     )
 
+    if db.missing_targets(clang_tidy_scan_targets(source_paths)):
+        filter_clang_tidy_sources(db, scan_paths=source_paths)
+        return 1
+    if db.missing_targets(clang_tidy_scan_targets(unsafe_api_paths)):
+        filter_clang_tidy_sources(db, scan_paths=unsafe_api_paths)
+        return 1
     source_targets = filter_clang_tidy_sources(db, scan_paths=source_paths)
-    if not source_targets:
-        return 1
     unsafe_targets = filter_clang_tidy_sources(db, scan_paths=unsafe_api_paths)
-    if not unsafe_targets:
-        return 1
 
     failures = 0
     if source_overlays:
@@ -2282,7 +2364,11 @@ def run_self_test() -> int:
         data = _yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         data["compile_db"] = {
             "firmware": [
-                {"compile_commands_json": "esp-idf/build/compile_commands.json"}
+                {
+                    "compile_commands_json": "esp-idf/build/compile_commands.json",
+                    "source": "esp-idf",
+                    "commands": ["make idf-build"],
+                }
             ],
             "userspace": [
                 {
@@ -2494,6 +2580,7 @@ def main() -> int:
     cfg.add_argument("--jobs", type=int, default=1)
 
     sub.add_parser("ensure-firmware-compile-db")
+    sub.add_parser("run-firmware-build")
 
     cp = sub.add_parser("run-cppcheck")
     cp.add_argument("--jobs", type=int, default=1)
@@ -2523,6 +2610,9 @@ def main() -> int:
     if args.command == "ensure-firmware-compile-db":
         load(repo)
         return ensure_firmware_compile_commands(repo)
+    if args.command == "run-firmware-build":
+        load(repo)
+        return run_firmware_build(repo)
     if args.command == "configure-compile-db":
         if unsafe_api_paths is None or source_paths is None:
             parser.error(

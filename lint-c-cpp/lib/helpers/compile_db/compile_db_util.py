@@ -506,10 +506,34 @@ def amalgamation_included_source_keys(
     return frozenset(covered)
 
 
+PROVENANCE_KEY = "_lint_kit_compile_db_provenance"
+
+# Fields clang/cppcheck compile_commands.json parsers accept (plus optional output).
+_PUBLIC_COMPILE_ENTRY_KEYS = frozenset({"directory", "file", "command", "arguments", "output"})
+
+
+def entry_compile_db_provenance(entry: dict[str, Any] | None) -> list[str]:
+    """Return compile_commands_json paths that contributed ``entry`` (may be empty)."""
+    if not isinstance(entry, dict):
+        return []
+    raw = entry.get(PROVENANCE_KEY)
+    if isinstance(raw, list):
+        return [Path(str(item)).as_posix() for item in raw if item]
+    if isinstance(raw, str) and raw.strip():
+        return [Path(raw.strip()).as_posix()]
+    return []
+
+
+def public_compile_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Drop kit-private keys (e.g. provenance) before writing clang/cppcheck JSON."""
+    return {key: value for key, value in entry.items() if key in _PUBLIC_COMPILE_ENTRY_KEYS}
+
 def _merge_compile_entries(
     by_file: dict[str, dict[str, Any]],
     db_path: Path,
     repo_root: Path,
+    *,
+    provenance: str | None = None,
 ) -> None:
     from scan_policy import path_in_scan_scope
 
@@ -531,12 +555,59 @@ def _merge_compile_entries(
         # (e.g. LiFi third-party/esp-idf rows from the raw IDF compile DB).
         if not path_in_scan_scope(key, repo_root):
             continue
+        if provenance:
+            prior = normalized.get(PROVENANCE_KEY)
+            if isinstance(prior, list):
+                if provenance not in prior:
+                    prior.append(provenance)
+            else:
+                normalized[PROVENANCE_KEY] = [provenance]
         existing = by_file.get(key)
-        if existing is not None and compile_entry_merge_preference(
-            normalized, key, repo_root=repo_root
-        ) >= compile_entry_merge_preference(existing, key, repo_root=repo_root):
-            continue
+        if existing is not None:
+            # Preserve provenance from every DB that listed this source.
+            if provenance:
+                existing_prov = existing.setdefault(PROVENANCE_KEY, [])
+                if isinstance(existing_prov, list) and provenance not in existing_prov:
+                    existing_prov.append(provenance)
+            if compile_entry_merge_preference(
+                normalized, key, repo_root=repo_root
+            ) >= compile_entry_merge_preference(existing, key, repo_root=repo_root):
+                continue
+            # Keep accumulated provenance on the preferred entry.
+            if isinstance(existing.get(PROVENANCE_KEY), list):
+                preferred_prov = normalized.setdefault(PROVENANCE_KEY, [])
+                if isinstance(preferred_prov, list):
+                    for item in existing[PROVENANCE_KEY]:
+                        if item not in preferred_prov:
+                            preferred_prov.append(item)
         by_file[key] = normalized
+
+
+def load_compile_entries_by_db(repo_root: Path) -> dict[str, dict[str, dict[str, Any]]]:
+    """Per-database compile entries keyed by manifest ``compile_commands_json`` path."""
+    repo_root = repo_root.resolve()
+    load(repo_root)
+    by_db: dict[str, dict[str, dict[str, Any]]] = {}
+    from consumer_manifest import (
+        compile_db_firmware_entries,
+        compile_db_userspace_entries,
+    )
+
+    declared: list[tuple[str, Path]] = []
+    for entry in compile_db_firmware_entries(repo_root):
+        rel = Path(str(entry["compile_commands_json"])).as_posix()
+        declared.append((rel, (repo_root / rel).resolve()))
+    for entry in compile_db_userspace_entries(repo_root):
+        rel = Path(str(entry["compile_commands_json"])).as_posix()
+        declared.append((rel, (repo_root / rel).resolve()))
+
+    for rel, db_path in declared:
+        bucket: dict[str, dict[str, Any]] = {}
+        _merge_compile_entries(bucket, db_path, repo_root, provenance=rel)
+        for entry in bucket.values():
+            entry[PROVENANCE_KEY] = [rel]
+        by_db[rel] = bucket
+    return by_db
 
 
 def load_richest_compile_entries(repo_root: Path) -> dict[str, dict[str, Any]]:
@@ -544,7 +615,11 @@ def load_richest_compile_entries(repo_root: Path) -> dict[str, dict[str, Any]]:
     load(repo_root)
     by_file: dict[str, dict[str, Any]] = {}
     for _label, db_path in compile_db_required_compile_command_paths(repo_root):
-        _merge_compile_entries(by_file, db_path, repo_root)
+        try:
+            rel = db_path.relative_to(repo_root).as_posix()
+        except ValueError:
+            rel = db_path.as_posix()
+        _merge_compile_entries(by_file, db_path, repo_root, provenance=rel)
     return by_file
 
 

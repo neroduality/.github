@@ -56,6 +56,7 @@ KNOWN_LINT_JOBS_ORDERED: tuple[str, ...] = (
     "spec_traceability",
     "cppcheck",
     "firmware_compile_db",
+    "firmware_build",
 )
 KNOWN_LINT_JOBS: frozenset[str] = frozenset(KNOWN_LINT_JOBS_ORDERED)
 
@@ -191,7 +192,17 @@ def scan_source_roots(repo_root: Path) -> tuple[str, ...]:
     return tuple(str(item) for item in raw if isinstance(item, str))
 
 
-DEFAULT_CODESPELL_SOURCE_SUFFIXES = (".c", ".cpp", ".h", ".hpp", ".ino")  # .ino: typos only; not a TU
+DEFAULT_CODESPELL_SOURCE_SUFFIXES = (
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".ino",
+)  # .ino: typos only; not a TU
 DEFAULT_CODESPELL_DOC_SUFFIXES = (".md", ".yaml", ".yml")
 
 _DEFINE_HARDENING_RE = re.compile(r"define_hardening\s*\((.*?)\)", re.DOTALL | re.IGNORECASE)
@@ -396,11 +407,15 @@ def _normalize_firmware_entry(item: dict[str, Any]) -> dict[str, Any] | None:
     compile_db = item.get("compile_commands_json")
     if not isinstance(compile_db, str) or not compile_db.strip():
         return None
+    source = item.get("source")
+    if not isinstance(source, str) or not source.strip():
+        return None
     commands = item.get("commands")
     if not isinstance(commands, list):
         commands = []
     return {
         "compile_commands_json": compile_db.strip(),
+        "source": Path(source.strip()).as_posix(),
         "commands": [str(cmd).strip() for cmd in commands if isinstance(cmd, str) and cmd.strip()],
     }
 
@@ -762,20 +777,21 @@ HeaderRole = str  # "c_compatible" | "cxx_only"
 def firmware_compile_source_roots(repo_root: Path) -> tuple[str, ...]:
     """Repo-relative roots that prefer cross/firmware compile templates.
 
-    Union of:
-      - ``policy.shared_c_cxx_source_roots`` except host unit-test trees (``tests/…``)
-      - ``esp-idf`` when it is a ``scan.source_roots`` entry (LiFi / ESP-IDF pilots)
-
-    ``tests/…`` may still use the shared-c-cxx clang-tidy overlay (C interop surface) via
-    ``shared_c_cxx_source_roots``, but must keep host CMake compile commands.
+    Derived from each ``compile_db.firmware[].source`` field (independent of
+    ``policy.shared_c_cxx_source_roots``, which only selects the shared C/C++ tidy
+    overlay). Host unit-test trees (``tests/…``) are excluded so they keep host
+    CMake commands. ``esp-idf`` is still added when it is a scan source root
+    (LiFi / ESP-IDF pilots) even if no firmware entry lists it yet.
     """
     from scan_policy import scan_source_roots
 
     roots: list[str] = []
     seen: set[str] = set()
-    for root in shared_c_cxx_source_roots(repo_root):
-        if root == "tests" or root.startswith("tests/"):
+    for entry in compile_db_firmware_entries(repo_root):
+        root = str(entry.get("source", "")).strip()
+        if not root or root == "tests" or root.startswith("tests/"):
             continue
+        root = Path(root).as_posix()
         if root not in seen:
             roots.append(root)
             seen.add(root)
@@ -964,6 +980,15 @@ def compile_db_firmware_build_commands(repo_root: Path) -> list[str]:
     return commands
 
 
+def firmware_build_commands(repo_root: Path) -> list[str]:
+    """Shell commands from top-level ``firmware_build.commands`` (actual firmware builds)."""
+    block = section(repo_root, "firmware_build")
+    raw = block.get("commands")
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
 def firmware_diagnostics_gate_source_keys(repo_root: Path) -> frozenset[str]:
     """Deprecated no-op: ``-Werror*`` waivers require ``policy.overrides.openssf-hardening``."""
     del repo_root
@@ -1031,7 +1056,12 @@ def toolchain_script(repo_root: Path) -> Path | None:
     if not isinstance(rel, str) or not rel.strip():
         return None
     path = (repo_root / rel).resolve()
-    return path if path.is_file() else None
+    if not path.is_relative_to(repo_root.resolve()) or not path.is_file():
+        raise ValueError(
+            f"{manifest_path(repo_root)}: configured toolchain.script is missing or outside "
+            f"the repository: {rel}"
+        )
+    return path
 
 
 def workflow_bare_vm_waivers(repo_root: Path) -> frozenset[tuple[str, str]]:
@@ -1172,6 +1202,7 @@ def main() -> int:
             "codespell",
             "license",
             "cmake",
+            "python",
         ),
         help="Scan job from scan_policy (consumer repo)",
     )

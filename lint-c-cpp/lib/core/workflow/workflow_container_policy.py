@@ -23,6 +23,13 @@ import sys
 from itertools import chain
 from pathlib import Path
 
+_LINT_LIB = Path(__file__).resolve().parents[2]
+if str(_LINT_LIB) not in sys.path:
+    sys.path.insert(0, str(_LINT_LIB))
+from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath
+
+_bootstrap_lint_pythonpath()
+
 try:
     import yaml
 except ImportError:
@@ -30,6 +37,15 @@ except ImportError:
     raise SystemExit(2) from None
 
 from consumer_manifest import workflow_bare_vm_waivers
+
+
+def valid_container(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        image = value.get("image")
+        return isinstance(image, str) and bool(image.strip())
+    return False
 
 
 def lint_workflows(repo_root: Path) -> int:
@@ -62,7 +78,7 @@ def lint_workflows(repo_root: Path) -> int:
             has_run_step = any(
                 isinstance(step, dict) and "run" in step for step in job.get("steps", [])
             )
-            if has_run_step and "container" not in job:
+            if has_run_step and not valid_container(job.get("container")):
                 waiver_key = (workflow.name, str(job_id))
                 if str(job_id).casefold() == "lint":
                     errors.append(

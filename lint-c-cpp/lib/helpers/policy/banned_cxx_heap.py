@@ -29,7 +29,7 @@ from scan_policy import blank_comments_and_strings, is_preprocessor_at, line_num
 LINT_TITLE = "C++ heap policy"
 LINT_FIX_HINT = "Use stack/static buffers only; no C++ new/delete in project code."
 LINT_OK_DETAIL = (
-    "  (wrapper_files exempt; complements clang-tidy unsafe — "
+    "  (wrapper_files remain in scope; complements clang-tidy unsafe — "
     "C++ new/delete only; malloc/free via banned_libc_io)"
 )
 
@@ -112,8 +112,8 @@ def verify_self_test(errors: list[str]) -> int:
         if not expected and name in reported:
             print(f"self-test false positive: {name}", file=sys.stderr)
             failed = True
-    if "cxx_heap_sink.cpp" in reported:
-        print("self-test false positive in cxx_heap_sink.cpp", file=sys.stderr)
+    if "cxx_heap_sink.cpp" not in reported:
+        print("self-test miss: wrapper_files must not waive heap policy", file=sys.stderr)
         failed = True
     if failed:
         print("reported:", sorted(reported), file=sys.stderr)

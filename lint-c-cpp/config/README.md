@@ -33,7 +33,7 @@ Sources: [References](#references).
 | Status | Keys |
 | --- | --- |
 | Required non-null | `compile_db`, `enabled_lint_jobs`, `license_header`, `policy`, `scan` |
-| Required, may be `null` | `spec_traceability`, `toolchain`, `workflow`, `yamllint` |
+| Required, may be `null` | `firmware_build`, `spec_traceability`, `toolchain`, `workflow`, `yamllint` |
 
 ## Config files
 
@@ -46,6 +46,7 @@ Sources: [References](#references).
 | `.clang-tidy-unsafe-c` / `-cxx` | Banned APIs only |
 | `openssf-hardening-manifest.yaml` | OpenSSF coverage + FULL cmake wiring |
 | `cppcheck-manifest.yaml` | cppcheck passes / CLI |
+| `ruff.toml` / `mypy.ini` | Python lint (`python_lint` job) config |
 | `.markdownlint.yaml` | Markdownlint defaults |
 | `tool-versions.yaml` | Minimum host tool versions |
 
@@ -73,16 +74,19 @@ N` (`N` = size of the kit job allowlist below).
 
 Not gated: tool-versions, manifest validate, toolchain precheck, override
 materialize. `--custom-lints-only` also skips `compile_db`, `clang_tidy`,
-`cppcheck`, `firmware_compile_db` when listed.
+`cppcheck`, `firmware_compile_db`, `firmware_build` when listed.
+
+Lint section banners print the job ID for mapping to this table, e.g.
+`── 17. pointer_bounds — Require safe external buffer indexing ──`.
 
 | ID | Section |
 | --- | --- |
 | `license` | License / SPDX headers |
 | `yamllint` | YAML sort/format |
 | `markdownlint` | Markdown |
-| `format` | clang-format, shfmt, shellcheck, codespell |
+| `format` | clang-format, shfmt, shellcheck, codespell, ruff, mypy |
 | `openssf` | OpenSSF hardeninglint |
-| `compile_db` | Compile DBs + OpenSSF compile-DB audit |
+| `compile_db` | Host compile DBs + OpenSSF compile-DB audit |
 | `clang_tidy` | clang-tidy |
 | `banned_cxx_heap` | No C++ `new`/`delete` |
 | `banned_libc_io` | Bounded libc / I/O wrappers |
@@ -97,7 +101,8 @@ materialize. `--custom-lints-only` also skips `compile_db`, `clang_tidy`,
 | `nolint_audit` | No NOLINT / cppcheck-suppress |
 | `spec_traceability` | Spec traceability (if path exists) |
 | `cppcheck` | cppcheck |
-| `firmware_compile_db` | Firmware `compile_commands.json` |
+| `firmware_compile_db` | Firmware `compile_commands.json` (like `compile_db`) |
+| `firmware_build` | Full firmware builds via `firmware_build.commands` |
 
 ## `policy.overrides`
 
