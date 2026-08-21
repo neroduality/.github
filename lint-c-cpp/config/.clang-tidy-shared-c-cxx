@@ -20,10 +20,12 @@
 Checks: >
   clang-diagnostic-*,
   clang-analyzer-*,
+  android-cloexec-*,
   bugprone-*,
   cert-*,
   concurrency-*,
   cppcoreguidelines-*,
+  misc-*,
   modernize-*,
   performance-*,
   portability-*,
@@ -42,6 +44,11 @@ Checks: >
   misc-misleading-bidirectional,
   misc-confusable-identifiers,
   misc-misleading-identifier,
+  -android-cloexec-pipe,
+  -misc-header-include-cycle,
+  -misc-use-anonymous-namespace,
+  -misc-include-cleaner,
+  -misc-no-recursion,
   -modernize-use-trailing-return-type,
   -modernize-use-std-print,
   -readability-identifier-length,
@@ -78,6 +85,8 @@ Checks: >
   -cppcoreguidelines-macro-to-enum,
   -cppcoreguidelines-macro-usage,
   -cert-err33-c,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
   -concurrency-mt-unsafe,
   -portability-avoid-pragma-once
 
@@ -86,6 +95,9 @@ WarningsAsErrors: '*'
 HeaderFilterRegex: ".*"
 
 CheckOptions:
+  # Google style: passive structs may keep all data members public.
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: 'true'
   - key: bugprone-unsafe-functions.ReportMoreUnsafeFunctions
     value: 'false'
   - key: bugprone-unsafe-functions.ReportDefaultFunctions
@@ -128,6 +140,20 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.GlobalFunctionCase
     value: CamelCase
+  # External-ABI symbols whose names are fixed by an outside contract and cannot
+  # follow Google naming: linker --wrap interceptors (__wrap_/__real_) and the
+  # libFuzzer entry point (LLVMFuzzer*). Scoped allowlist only -- every other
+  # identifier stays fully enforced, and this is not a general naming relaxation.
+  - key: readability-identifier-naming.GlobalFunctionIgnoredRegexp
+    value: '^(__wrap_|__real_|LLVMFuzzer).*'
+  - key: readability-identifier-naming.FunctionIgnoredRegexp
+    value: '^(__wrap_|__real_|LLVMFuzzer).*'
+  # The __wrap_/__real_ symbols also start with a reserved '__'. bugprone-reserved
+  # -identifier honors this allowlist; its cert-dcl37-c/cert-dcl51-cpp aliases do
+  # NOT inherit the option in clang-tidy, so those aliases are disabled in Checks
+  # above (the primary bugprone-reserved-identifier check still enforces the rule).
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: '^__wrap_.*$;^__real_.*$'
   - key: readability-identifier-naming.ConstexprFunctionCase
     value: CamelCase
   - key: readability-identifier-naming.ClassMethodCase
@@ -160,10 +186,21 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.ClassConstantPrefix
     value: k
+  # Google constant naming, precisely mapped to clang-tidy's identifier
+  # categories:
+  #   * Constants "fixed for the program's duration" take the k + CamelCase form.
+  #     In C++ these are constexpr (ConstexprVariable, below) or have static
+  #     storage (Static/Global/Class constant, above) -- all already k+CamelCase.
+  #   * A plain `const` LOCAL is an automatic-storage, usually runtime-initialized
+  #     value (e.g. `const auto name = Compute(arg);`). Google names these with
+  #     ordinary variable style (lower_case); the k prefix does NOT apply because
+  #     the value is not a program-duration constant. Truly compile-time locals
+  #     should be `constexpr`, which then correctly gets k+CamelCase.
+  # So LocalConstant = lower_case is the strict, correct rule (matches the C
+  # overlay). This is NOT the wip "any case" relaxation -- kCamelCase/MixedCase
+  # runtime const locals are rejected; only ordinary lower_case is accepted.
   - key: readability-identifier-naming.LocalConstantCase
-    value: CamelCase
-  - key: readability-identifier-naming.LocalConstantPrefix
-    value: k
+    value: lower_case
   - key: readability-identifier-naming.GlobalConstantCase
     value: CamelCase
   - key: readability-identifier-naming.GlobalConstantPrefix

@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 # Scan scope and policy accessors from lint-c-cpp.yaml.
-# Paths: consumer_manifest.py scan-paths <job> → --paths-file. Unsafe wrappers stay
+# Paths: consumer_manifest.py scan-paths <job> -> --paths-file. Unsafe wrappers stay
 # in scope; individual checks may waive only the APIs their wrapper implements.
 # BANNED_C_API_NAMES is the SoT for Python banned_libc_io (includes heap + output APIs).
 
@@ -42,7 +42,7 @@ from consumer_manifest import (
 )
 
 # Policy / tidy / OpenSSF / format TUs and headers. Arduino ``.ino`` is not a
-# normal translation unit here — only license headers + codespell (see profiles).
+# normal translation unit here -- only license headers + codespell (see profiles).
 SOURCE_SUFFIXES = frozenset(
     {".h", ".hh", ".hpp", ".hxx", ".c", ".cc", ".cpp", ".cxx"}
 )
@@ -206,7 +206,7 @@ def canonical_index_files(repo_root: Path) -> frozenset[str]:
 
 
 def bootstrap_policy_yaml(prefix: str) -> str:
-    """Synthetic-repo defaults only — consumer manifests must declare these explicitly."""
+    """Synthetic-repo defaults only -- consumer manifests must declare these explicitly."""
     return (
         "policy:\n"
         "  constants_headers: [limits.h, board_config.h, config.h]\n"
@@ -298,10 +298,18 @@ def license_header_classify(path: Path) -> LicenseHeaderKind | None:
 
 
 def iter_cmake_lists_under_scan_scope(repo_root: Path) -> list[Path]:
-    """Every CMakeLists.txt under scan.source_roots (all nested directories)."""
+    """Every CMakeLists.txt under scan.source_roots, plus the repo-root CMakeLists.txt.
+
+    Single-root userspace projects keep one top-level ``CMakeLists.txt`` at the repo
+    root (outside scan.source_roots); include it so hardening adoption and CMake
+    project discovery see it too.
+    """
     repo_root = repo_root.resolve()
     skip = scan_walk_skip_dir_names(repo_root)
     paths: list[Path] = []
+    root_cmake = repo_root / "CMakeLists.txt"
+    if root_cmake.is_file():
+        paths.append(root_cmake)
     for root_name in scan_source_roots(repo_root):
         base = repo_root / root_name
         if not base.is_dir():
@@ -309,7 +317,9 @@ def iter_cmake_lists_under_scan_scope(repo_root: Path) -> list[Path]:
         for path in walk_tree(base, skip):
             if path.name == "CMakeLists.txt":
                 paths.append(path)
-    return sorted(paths)
+    # De-duplicate in case a source root nests the repo-root file.
+    unique = sorted({path.resolve() for path in paths})
+    return unique
 
 
 def discover_all_directories(repo_root: Path) -> tuple[str, ...]:
@@ -682,7 +692,7 @@ def scan_job_profile(job: str) -> dict[str, object]:
 
 
 def read_paths_file(paths_file: Path, repo_root: Path) -> list[Path]:
-    """Load scan-paths output: repo-relative lines → sorted absolute paths (resolve once).
+    """Load scan-paths output: repo-relative lines -> sorted absolute paths (resolve once).
 
     Gitignore and ``scan.source_roots`` are applied upstream by ``scan-paths``;
     this function only validates and resolves to absolute paths under ``repo_root``.

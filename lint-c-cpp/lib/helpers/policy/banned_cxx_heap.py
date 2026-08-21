@@ -29,7 +29,7 @@ from scan_policy import blank_comments_and_strings, is_preprocessor_at, line_num
 LINT_TITLE = "C++ heap policy"
 LINT_FIX_HINT = "Use stack/static buffers only; no C++ new/delete in project code."
 LINT_OK_DETAIL = (
-    "  (wrapper_files remain in scope; complements clang-tidy unsafe — "
+    "  (wrapper_files remain in scope; complements clang-tidy unsafe -- "
     "C++ new/delete only; malloc/free via banned_libc_io)"
 )
 

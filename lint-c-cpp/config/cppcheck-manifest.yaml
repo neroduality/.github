@@ -23,13 +23,37 @@ cppcheck:
     - id: source
       scan_job: source
 
+  # Maximized second engine: warning + style + performance + portability at
+  # exhaustive value-flow depth, with POSIX library models. `information` is
+  # config-noise-only and `unusedFunction` is incompatible with -j; both stay
+  # off. Dials: policy.overrides.cppcheck (enable / suppress ids only).
   cli:
     flags:
       - --quiet
       - --inconclusive
       - --error-exitcode=1
-    enable: [warning]
+      - --check-level=exhaustive
+      - --library=posix
+    enable: [warning, style, performance, portability]
     suppressions:
       - missingIncludeSystem
+      # Fixed callback ABIs (pthread/qsort-style void* params) cannot take
+      # const without function-pointer casts; overlaps clang-tidy
+      # readability-non-const-parameter which handles the non-callback cases.
+      - constParameterCallback
+      # Dual C/C++ headers (.h shared by C firmware and C++ tests) must use
+      # C-style casts; clang-tidy google-readability-casting already gates
+      # C++-only sources, where the header role split excludes shared .h.
+      - cstyleCast
+      # Opinionated rewrite of short fixed-bound loops into <algorithm>
+      # calls; explicit loops are the accepted style for embedded and test
+      # fixture code, and the check has no correctness value.
+      - useStlAlgorithm
+      # Compares only parameter *names* between a declaration and its
+      # definition (inconclusive style); fires pervasively on function-pointer
+      # typedefs / HAL callback ABIs whose declarations leave parameters
+      # unnamed while the implementation names them. Cannot find a bug -- pure
+      # naming cosmetics -- and NOLINT/inline-suppress is forbidden kit-wide.
+      - funcArgNamesDifferentUnnamed
       - "*:*_deps/*"
       - "*:*/_deps/*"

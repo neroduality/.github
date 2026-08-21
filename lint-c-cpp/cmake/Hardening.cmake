@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.
+# Generated from config/openssf-hardening-manifest.yaml -- do not hand-edit.
 # Sync via policy.overrides.openssf-hardening (fail-on-change rewrite).
 #
 include(${CMAKE_CURRENT_LIST_DIR}/CompilerHardeningProbes.cmake)
@@ -34,11 +34,12 @@ function(define_hardening)
   set(_hardening_relwithdebinfo_cfg $<CONFIG:RelWithDebInfo>)
   set(_hardening_debug_cfg $<CONFIG:Debug>)
   target_compile_options("${HARDENING_TARGET}" INTERFACE
+    $<$<COMPILE_LANGUAGE:C>:$<$<AND:$<BOOL:${HAVE_C_FHARDENED}>,$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-fhardened>>
+    $<$<COMPILE_LANGUAGE:C>:$<$<AND:$<BOOL:${HAVE_C_WHARDENED}>,$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-Whardened>>
     $<$<COMPILE_LANGUAGE:C>:$<$<AND:$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,${_hardening_fortify_cfg},$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,$<NOT:$<BOOL:${HAVE_C_FHARDENED}>>>:-D_FORTIFY_SOURCE=3>>
     $<$<COMPILE_LANGUAGE:C>:$<$<AND:$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,${_hardening_fortify_cfg},$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,$<NOT:$<BOOL:${HAVE_C_FHARDENED}>>>:-U_FORTIFY_SOURCE>>
     $<$<COMPILE_LANGUAGE:C>:$<$<AND:${_hardening_host},$<OR:$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>,$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},AMD64>>>:-fcf-protection=full>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_ARM_BRANCH_PROTECTION_STANDARD}>:-mbranch-protection=standard>>
-    $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_FHARDENED}>:-fhardened>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_STACK_CLASH_PROTECTION}>:-fstack-clash-protection>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_STRICT_FLEX_ARRAYS_3}>:-fstrict-flex-arrays=3>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_TRIVIAL_AUTO_VAR_INIT_ZERO}>:-ftrivial-auto-var-init=zero>>
@@ -47,7 +48,6 @@ function(define_hardening)
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_WERROR_INCOMPATIBLE_POINTER_TYPES}>:-Werror=incompatible-pointer-types>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_WERROR_INT_CONVERSION}>:-Werror=int-conversion>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_WERROR_TRAMPOLINES}>:-Werror=trampolines>>
-    $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_WHARDENED}>:-Whardened>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_WTRAMPOLINES}>:-Wtrampolines>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_ZERO_INIT_PADDING_BITS_ALL}>:-fzero-init-padding-bits=all>>
     $<$<COMPILE_LANGUAGE:C>:$<$<BOOL:${HAVE_C_ZERO_INIT_PADDING_BITS_UNION}>:-fzero-init-padding-bits=union>>
@@ -70,17 +70,17 @@ function(define_hardening)
     $<$<COMPILE_LANGUAGE:C>:-fstack-protector-strong>
   )
   target_compile_options("${HARDENING_TARGET}" INTERFACE
+    $<$<COMPILE_LANGUAGE:CXX>:$<$<AND:$<BOOL:${HAVE_CXX_FHARDENED}>,$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-fhardened>>
+    $<$<COMPILE_LANGUAGE:CXX>:$<$<AND:$<BOOL:${HAVE_CXX_WHARDENED}>,$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-Whardened>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<AND:$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,${_hardening_fortify_cfg},$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,$<NOT:$<BOOL:${HAVE_C_FHARDENED}>>>:-D_FORTIFY_SOURCE=3>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<AND:$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,${_hardening_fortify_cfg},$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,$<NOT:$<BOOL:${HAVE_C_FHARDENED}>>>:-U_FORTIFY_SOURCE>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<AND:${_hardening_host},$<OR:$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>,$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},AMD64>>>:-fcf-protection=full>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_ARM_BRANCH_PROTECTION_STANDARD}>:-mbranch-protection=standard>>
-    $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_FHARDENED}>:-fhardened>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_STACK_CLASH_PROTECTION}>:-fstack-clash-protection>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_STRICT_FLEX_ARRAYS_3}>:-fstrict-flex-arrays=3>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_TRIVIAL_AUTO_VAR_INIT_ZERO}>:-ftrivial-auto-var-init=zero>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_WBIDI_CHARS_ANY}>:-Wbidi-chars=any>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_WERROR_TRAMPOLINES}>:-Werror=trampolines>>
-    $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_WHARDENED}>:-Whardened>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_WTRAMPOLINES}>:-Wtrampolines>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_ZERO_INIT_PADDING_BITS_ALL}>:-fzero-init-padding-bits=all>>
     $<$<COMPILE_LANGUAGE:CXX>:$<$<BOOL:${HAVE_CXX_ZERO_INIT_PADDING_BITS_UNION}>:-fzero-init-padding-bits=union>>

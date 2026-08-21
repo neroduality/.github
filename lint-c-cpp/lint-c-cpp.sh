@@ -36,7 +36,7 @@ Commands:
   lint [opts]         Run C/C++ lint (consumer .github/lint-c-cpp.yaml)
   precheck            Validate consumer manifest (fail fast)
   workflow-lint       Validate GitHub Actions workflow container policy
-  tools [args...]     tool_versions_check.py (verify, resolve, …)
+  tools [args...]     tool_versions_check.py (verify, resolve, ...)
   self-test           Run lint-c-cpp unit tests
 
 Options for lint:

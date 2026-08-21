@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Central self-test runner: temp repo → scan-paths → prepare_paths → lint(paths)."""
+"""Central self-test runner: temp repo -> scan-paths -> prepare_paths -> lint(paths)."""
 
 from __future__ import annotations
 

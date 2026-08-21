@@ -115,21 +115,6 @@ ALLOWED_TOOLCHAIN_KEYS = frozenset({"lint_kit", "script"})
 ALLOWED_LINT_KIT_KEYS = frozenset({"path", "ref", "repository"})
 ALLOWED_SPEC_TRACEABILITY_KEYS = frozenset({"manifest"})
 ALLOWED_YAMLLINT_KEYS = frozenset({"default", "files"})
-REQUIRED_BASELINE_JOBS = frozenset(
-    {
-        "banned_cxx_heap",
-        "banned_libc_io",
-        "clang_tidy",
-        "compile_db",
-        "cppcheck",
-        "guard_clause_style",
-        "nolint_audit",
-        "null_nodiscard",
-        "openssf",
-        "pointer_bounds",
-        "raii_lifetime",
-    }
-)
 
 
 def _unknown_keys(mapping: dict, allowed: frozenset[str], label: str) -> list[str]:
@@ -308,16 +293,25 @@ def validate_enabled_lint_jobs(data: dict, manifest_path: Path) -> list[str]:
             issues.append(f"{manifest_path}: enabled_lint_jobs: duplicate job {job!r}")
             continue
         seen.add(job)
-    missing_baseline = sorted(REQUIRED_BASELINE_JOBS - seen)
-    if missing_baseline:
-        issues.append(
-            f"{manifest_path}: enabled_lint_jobs omits required safety jobs: "
-            f"{', '.join(missing_baseline)}"
-        )
+    # Consumers choose their own job set (no mandatory baseline) so the kit can
+    # serve projects of any size. Jobs still gate their own prerequisites below.
     for consumer in ("clang_tidy", "cppcheck", "openssf", "firmware_compile_db"):
         if consumer in seen and "compile_db" not in seen:
             issues.append(
                 f"{manifest_path}: enabled_lint_jobs: {consumer} requires compile_db"
+            )
+    compile_db_block = data.get("compile_db")
+    firmware_entries = (
+        compile_db_block.get("firmware")
+        if isinstance(compile_db_block, dict)
+        and isinstance(compile_db_block.get("firmware"), list)
+        else []
+    )
+    for fw_job in ("firmware_compile_db", "firmware_build"):
+        if fw_job in seen and not firmware_entries:
+            issues.append(
+                f"{manifest_path}: enabled_lint_jobs: {fw_job} requires a non-empty "
+                "compile_db.firmware (remove the job for userspace-only projects)"
             )
     if "firmware_build" in seen:
         block = data.get("firmware_build")
@@ -674,11 +668,14 @@ def _validate_compile_db_firmware_list(firmware: Any, manifest_path: Path) -> li
     if isinstance(firmware, dict):
         issues.append(
             f"{manifest_path}: compile_db.firmware must be a list "
-            "(use `- compile_commands_json: …` entries)"
+            "(use `- compile_commands_json: ...` entries)"
         )
         return issues
-    if not isinstance(firmware, list) or not firmware:
-        issues.append(f"{manifest_path}: compile_db.firmware must be a non-empty list")
+    if not isinstance(firmware, list):
+        issues.append(
+            f"{manifest_path}: compile_db.firmware must be a list "
+            "(use [] when the project builds no firmware)"
+        )
         return issues
     for index, entry in enumerate(firmware):
         label = f"compile_db.firmware[{index}]"
@@ -719,11 +716,14 @@ def _validate_compile_db_userspace_list(userspace: Any, manifest_path: Path) -> 
     if isinstance(userspace, dict):
         issues.append(
             f"{manifest_path}: compile_db.userspace must be a list "
-            "(use `- compile_commands_json: …` entries)"
+            "(use `- compile_commands_json: ...` entries)"
         )
         return issues
-    if not isinstance(userspace, list) or not userspace:
-        issues.append(f"{manifest_path}: compile_db.userspace must be a non-empty list")
+    if not isinstance(userspace, list):
+        issues.append(
+            f"{manifest_path}: compile_db.userspace must be a list "
+            "(use [] when the project builds no host userspace targets)"
+        )
         return issues
     for index, entry in enumerate(userspace):
         label = f"compile_db.userspace[{index}]"
@@ -768,7 +768,7 @@ def validate_compile_db(data: dict, manifest_path: Path) -> list[str]:
     block = data.get("compile_db")
     if block is None:
         return [
-            f"{manifest_path}: compile_db is required — declare compile_db.firmware and "
+            f"{manifest_path}: compile_db is required -- declare compile_db.firmware and "
             "compile_db.userspace so the lint proves the code compiles (no silent skip)"
         ]
     if not isinstance(block, dict):
@@ -778,15 +778,21 @@ def validate_compile_db(data: dict, manifest_path: Path) -> list[str]:
     if unknown:
         issues.append(f"{manifest_path}: unknown compile_db fields: {', '.join(unknown)}")
     firmware = block.get("firmware")
-    if firmware is None:
-        issues.append(f"{manifest_path}: compile_db.firmware is required")
-    else:
-        issues.extend(_validate_compile_db_firmware_list(firmware, manifest_path))
     userspace = block.get("userspace")
-    if userspace is None:
-        issues.append(f"{manifest_path}: compile_db.userspace is required")
-    else:
+    # firmware/userspace may be omitted or null (no builds of that class); the kit
+    # only requires that the repo declares at least one build overall.
+    if firmware is not None:
+        issues.extend(_validate_compile_db_firmware_list(firmware, manifest_path))
+    if userspace is not None:
         issues.extend(_validate_compile_db_userspace_list(userspace, manifest_path))
+    firmware_entries = firmware if isinstance(firmware, list) else []
+    userspace_entries = userspace if isinstance(userspace, list) else []
+    if not firmware_entries and not userspace_entries:
+        issues.append(
+            f"{manifest_path}: compile_db declares no builds -- add at least one "
+            "compile_db.userspace or compile_db.firmware entry so the lint proves the "
+            "code compiles (no silent skip)"
+        )
     return issues
 
 
@@ -850,7 +856,7 @@ def main() -> int:
         for issue in issues:
             print(f"error: {issue}", file=sys.stderr)
         return 1
-    print(f"validate_manifest: OK — {manifest}")
+    print(f"validate_manifest: OK -- {manifest}")
     return 0
 
 

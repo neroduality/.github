@@ -51,6 +51,17 @@ OVERRIDE_KEY_BY_CLANG_TIDY_CONFIG = {
 _CHECKS_SPLIT_RE = re.compile(r"[\s,]+")
 
 
+def _clang_tidy_check_tokens(body: str) -> list[str]:
+    """Split a YAML ``Checks: >`` body into clang-tidy tokens, ignoring comments."""
+    tokens: list[str] = []
+    for raw_line in body.splitlines():
+        stripped = raw_line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        tokens.extend(part for part in _CHECKS_SPLIT_RE.split(stripped) if part)
+    return tokens
+
+
 def _declared_compile_commands_json(repo_root: Path) -> frozenset[str]:
     from consumer_manifest import compile_db_firmware_entries, compile_db_userspace_entries
 
@@ -316,7 +327,7 @@ def owning_compile_commands_json(
     lists the source. When ``provenance`` lists DBs that contained the source,
     overrides are resolved against a provenance member rather than an arbitrary
     first match. Paths under ``firmware_compile_source_roots`` otherwise prefer a
-    firmware DB that lists the key. ``tests/firmware/…`` stays on the
+    firmware DB that lists the key. ``tests/firmware/...`` stays on the
     tests/userspace DB. Otherwise prefer a userspace DB that lists the key.
     """
     from consumer_manifest import firmware_compile_source_roots
@@ -567,7 +578,7 @@ def apply_clang_tidy_checks_overrides(text: str, *, add: tuple[str, ...] | None,
     if match is None:
         return text
     prefix, body, suffix = match.group(1), match.group(2), match.group(3)
-    tokens = [part for part in _CHECKS_SPLIT_RE.split(body) if part]
+    tokens = _clang_tidy_check_tokens(body)
     normalized: list[str] = []
     seen: set[str] = set()
     for token in tokens:

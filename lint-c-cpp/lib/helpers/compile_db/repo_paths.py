@@ -5,7 +5,7 @@
 #
 # Single normalization for scan paths, compile DB keys, and downstream audits.
 # Every lint job that maps a filesystem path to a repo-relative source uses
-# ``source_key()`` here — not ad hoc ``Path.resolve()`` / string compares.
+# ``source_key()`` here -- not ad hoc ``Path.resolve()`` / string compares.
 
 from __future__ import annotations
 

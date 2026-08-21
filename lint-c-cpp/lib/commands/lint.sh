@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Generic C/C++ lint driver — all project paths and policy from .github/lint-c-cpp.yaml.
+# Generic C/C++ lint driver -- all project paths and policy from .github/lint-c-cpp.yaml.
 
 set -euo pipefail
 
@@ -105,7 +105,7 @@ repo = Path.cwd().resolve()
 kit = resolve_lint_kit(Path(os.environ["LINT_KIT"]) if os.environ.get("LINT_KIT") else None)
 out = lint_overrides_dir(repo)
 materialize_override_configs(repo, kit, out)
-print(f"policy.overrides: materialized → {out.relative_to(repo)}")
+print(f"policy.overrides: materialized -> {out.relative_to(repo)}")
 PY
 clang_format_config="${overrides_dir}/.clang-format"
 if [[ ! -f $clang_format_config ]]; then
@@ -186,7 +186,7 @@ section() {
   local job_id=$1
   local title=$2
   _lint_section_n=$((_lint_section_n + 1))
-  printf '\n── %s. %s — %s ──\n' "$_lint_section_n" "$job_id" "$title"
+  printf '\n── %s. %s -- %s ──\n' "$_lint_section_n" "$job_id" "$title"
 }
 lint_jobs="${LINT_JOBS:-$(nproc)}"
 
@@ -463,7 +463,7 @@ fi
 
 if ((custom_lints_only == 0)); then
   if lint_job_enabled compile_db; then
-    section compile_db "Generate compile databases (host configure → merge → OpenSSF audit)"
+    section compile_db "Generate compile databases (host configure -> merge -> OpenSSF audit)"
     if want_tool cmake "compile database generation"; then
       run python3 "${helpers}/compile_db/compile_db_lint.py" --self-test
       run_compile_db_lint configure-compile-db --jobs "$lint_jobs"

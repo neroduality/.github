@@ -126,7 +126,7 @@ def _rewrite_missing_abs_path(path_str: str, response_file: Path) -> str:
     Bind-mounted CI often rebases ``@cflags`` to ``/src/...`` while the file body
     still embeds the host checkout prefix (``-specs=/home/.../picolibc.specs``).
     Without repair, ``gcc -E -v -specs=...`` fails and cross scrub drops picolibc
-    ``-isystem`` order — clang then parses newlib ``stdio.h`` and breaks ``_REENT``.
+    ``-isystem`` order -- clang then parses newlib ``stdio.h`` and breaks ``_REENT``.
     """
     path = Path(path_str)
     if not path.is_absolute() or path.exists():
@@ -175,7 +175,7 @@ def _expand_at_response_tokens(tokens: list[str]) -> list[str]:
 
     Arduino Renesas (and similar) platforms put FSP/BSP ``-iwithprefixbefore``
     include paths and variant ``-D`` defines in ``@includes.txt`` / ``@defines.txt``.
-    Those must be expanded before clang-tidy scrubbing — dropping ``@file`` leaves
+    Those must be expanded before clang-tidy scrubbing -- dropping ``@file`` leaves
     headers like ``bsp_api.h`` unresolved.
 
     Absolute paths inside the response body are repaired against the response
@@ -354,7 +354,7 @@ def _template_for_target(
     ]
     # Firmware scan roots must inherit a cross/arduino template. Host unit-test compile
     # entries often share the same directory (tests compile firmware/*.cpp on the host) and
-    # would otherwise win via same_dir + host-preferring compile_entry_preference — leaving
+    # would otherwise win via same_dir + host-preferring compile_entry_preference -- leaving
     # synthesized firmware headers/TUs without Arduino.h / board -D defines.
     if _target_prefers_firmware_template(target, repo_root) and cross_templates:
         same_dir_cross = [
@@ -366,6 +366,24 @@ def _template_for_target(
             return min(same_dir_cross, key=compile_entry_preference)
         return min(cross_templates, key=compile_entry_preference)
     if same_dir:
+        # Prefer the same-stem translation unit when synthesizing a header so
+        # pkg-config / system -I flags (e.g. libpcsclite -> -I/usr/include/PCSC)
+        # are inherited instead of an unrelated same-directory host TU.
+        if rel is not None and target.suffix.lower() in {
+            ".h",
+            ".hh",
+            ".hpp",
+            ".hxx",
+        }:
+            same_stem = [
+                entry
+                for key, entry in by_file.items()
+                if Path(key).parent == rel.parent
+                and Path(key).stem == rel.stem
+                and Path(key).suffix.lower() in {".c", ".cc", ".cpp", ".cxx"}
+            ]
+            if same_stem:
+                return min(same_stem, key=compile_entry_preference)
         return min(same_dir, key=compile_entry_preference)
     root_prefix = rel.parts[0] if rel is not None and rel.parts else None
     if root_prefix is not None:
@@ -713,7 +731,15 @@ def filter_clang_tidy_sources(
     *,
     scan_paths: list[Path],
 ) -> list[Path]:
-    """Return TU inputs for clang-tidy after verifying full scan compile-DB coverage."""
+    """Return TU inputs for clang-tidy after verifying full scan compile-DB coverage.
+
+    ``policy.unsafe_api.wrapper_files`` are intentional infrastructure sinks (I/O
+    wrappers, test mocks / linker ``__wrap_`` interceptors / libFuzzer harnesses).
+    They stay clang-tidy inputs so every non-unsafe-API check still runs on them;
+    only the ``bugprone-unsafe-functions`` / ``clang-analyzer-security.insecureAPI.*``
+    diagnostics are waived per-line by ``clang_tidy_wrapper_filter.py`` in the
+    unsafe-api pass (never whole-file, never heap policy or tool failures).
+    """
     coverage_targets = clang_tidy_scan_targets(scan_paths)
     if not coverage_targets:
         return []
@@ -811,7 +837,7 @@ def _print_configure_compile_db_report(
 
     print("compile database: configure-compile-db summary", flush=True)
     print(
-        "  job: host CMake configure → merge compile_db.* inputs → scan-scoped outputs",
+        "  job: host CMake configure -> merge compile_db.* inputs -> scan-scoped outputs",
         flush=True,
     )
 
@@ -822,7 +848,7 @@ def _print_configure_compile_db_report(
         )
         for project in host_projects:
             print(
-                f"      {project['source']} → {project['compile_commands_json']}",
+                f"      {project['source']} -> {project['compile_commands_json']}",
                 flush=True,
             )
     else:
@@ -836,7 +862,7 @@ def _print_configure_compile_db_report(
         )
         for item in inputs:
             print(
-                f"      {item.label}: {item.rel_path} — {_format_compile_db_input_status(item)}",
+                f"      {item.label}: {item.rel_path} -- {_format_compile_db_input_status(item)}",
                 flush=True,
             )
 
@@ -888,12 +914,21 @@ def configure_compile_db(
     projects = compile_db_userspace_entries(repo_root)
     failures = 0
     if compile_db_is_configured(repo_root) and not projects:
-        print(
-            "error: compile_db.userspace is required "
-            "(declare a list of compile_commands_json and source entries)",
-            file=sys.stderr,
-        )
-        return 1
+        from consumer_manifest import compile_db_firmware_entries
+
+        if compile_db_firmware_entries(repo_root):
+            print(
+                "host compile DB: skip (no compile_db.userspace entries; "
+                "compile_db.firmware provides this repo's compile databases)",
+                flush=True,
+            )
+        else:
+            print(
+                "error: compile_db declares no builds -- add at least one "
+                "compile_db.userspace or compile_db.firmware entry",
+                file=sys.stderr,
+            )
+            return 1
     if projects:
         generator = cmake_generator()
         for project in projects:
@@ -1245,7 +1280,7 @@ def _compiler_driver_search_flags(tokens: list[str]) -> list[str]:
 
     Toolchains such as ESP-IDF put these in ``@cflags`` response files. Clang cannot
     honor ``-specs=``, so scrub must pass them into ``compiler -E -v`` when building
-    ``-isystem`` paths — otherwise newlib-first search breaks ``#include_next``.
+    ``-isystem`` paths -- otherwise newlib-first search breaks ``#include_next``.
     """
     return [
         token
@@ -1472,7 +1507,7 @@ def _scrub_cross_compile_command_argv(command: str, *, source_file: str) -> list
         specs_usable = False
     if not specs_usable:
         # C: keep libc/picolibc first (ESP-IDF ``_REENT`` / newlib vs picolibc).
-        # C++: never prepend libc ahead of libstdc++ — that breaks
+        # C++: never prepend libc ahead of libstdc++ -- that breaks
         # ``#include_next <stdlib.h>`` from ``<cstdlib>`` under clang.
         extra_isystem: list[str] = []
         for include_path in _cross_toolchain_include_paths(toolchain, target=target):

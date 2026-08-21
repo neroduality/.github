@@ -177,7 +177,7 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
             errors.append(
                 f"[{spec_prefix}] {symbol}: definition spans multiple lines in "
                 f"{source} (line continuation). Manifest constants must be a "
-                f"single-line #define, enum, or constexpr/const literal — move any trailing comment "
+                f"single-line #define, enum, or constexpr/const literal -- move any trailing comment "
                 f"to its own line above the definition.",
             )
             continue

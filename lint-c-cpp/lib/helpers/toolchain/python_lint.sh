@@ -24,7 +24,7 @@
 # or upgrades tools beyond what uvx fetches on demand.
 #
 # Usage:
-#   bash lib/helpers/toolchain/python_lint.sh [PATH …]
+#   bash lib/helpers/toolchain/python_lint.sh [PATH ...]
 #   bash lib/helpers/toolchain/python_lint.sh --check-config
 #
 # Sourceable helpers:
@@ -59,7 +59,7 @@ lint_kit_python_lint_self_test() {
   fi
   tmp="$(mktemp -d)"
   bad="${tmp}/lint_kit_bad_fixture.py"
-  # Unused import (F) + undefined name (F821) — both in the enforced rule set.
+  # Unused import (F) + undefined name (F821) -- both in the enforced rule set.
   printf 'import os\n\n\ndef broken() -> int:\n    return undefined_symbol\n' >"${bad}"
   if uvx "ruff@${LINT_KIT_RUFF_VERSION}" check \
     --config "${LINT_KIT_PYTHON_CONFIG_DIR}/ruff.toml" "${bad}" >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ lint_kit_python_lint_main() {
 
   usage() {
     cat <<'EOF'
-Usage: lib/helpers/toolchain/python_lint.sh [OPTIONS] [PATH …]
+Usage: lib/helpers/toolchain/python_lint.sh [OPTIONS] [PATH ...]
 
 Lint Python sources with ruff + mypy (kit-owned config). Paths default to every
 *.py file discovered via the consumer manifest (vendored/build trees skipped).

@@ -100,7 +100,7 @@ def paths_gitignored(repo_root: Path, rel_paths: list[str]) -> frozenset[str]:
     """Return repo-relative paths that ``git check-ignore`` matches.
 
     When git is unavailable, fail closed for ``.gitignore`` directory basenames
-    (``third-party/``, ``build/``, …) so vendor trees are not treated as in-scope.
+    (``third-party/``, ``build/``, ...) so vendor trees are not treated as in-scope.
     """
     repo_root = repo_root.resolve()
     if not rel_paths:

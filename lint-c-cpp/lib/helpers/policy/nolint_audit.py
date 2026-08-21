@@ -71,7 +71,7 @@ def scan_file(path: Path) -> list[str]:
         match = _SUPPRESSION_TOKEN.search(comment_line)
         if match is not None:
             raw = raw_lines[line_no - 1].strip() if line_no - 1 < len(raw_lines) else ""
-            findings.append(f"{path}:{line_no}: {match.group(0)} — {raw}")
+            findings.append(f"{path}:{line_no}: {match.group(0)} -- {raw}")
     return findings
 
 

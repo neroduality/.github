@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Single loader for consumer .github/lint-c-cpp.yaml — kit scripts read config here only.
+# Single loader for consumer .github/lint-c-cpp.yaml -- kit scripts read config here only.
 
 from __future__ import annotations
 
@@ -167,7 +167,7 @@ def _gitignore_dir_names(repo_root: Path) -> frozenset[str]:
         if not line or line.startswith("#") or line.startswith("!"):
             continue
         if not line.endswith("/"):
-            continue  # file pattern (or ambiguous) — not a directory prune
+            continue  # file pattern (or ambiguous) -- not a directory prune
         line = line[:-1]
         line = re.sub(r"^(?:\./|/)", "", line)
         line = re.sub(r"^\*\*/", "", line)
@@ -265,6 +265,8 @@ _CPPCHECK_C_STD_BY_CMAKE: dict[int, str] = {
     11: "c11",
     17: "c17",
     23: "c23",
+    # cppcheck spells the post-C23 draft "c2y" (no "c26" alias yet).
+    26: "c2y",
 }
 _CPPCHECK_CXX_STD_BY_CMAKE: dict[int, str] = {
     98: "c++98",
@@ -273,6 +275,7 @@ _CPPCHECK_CXX_STD_BY_CMAKE: dict[int, str] = {
     17: "c++17",
     20: "c++20",
     23: "c++23",
+    26: "c++26",
 }
 
 
@@ -524,7 +527,7 @@ def compile_db_cmake_coverage_issues(repo_root: Path) -> list[str]:
             issues.append(
                 "discovered host CMake root "
                 f"{rel_posix!r} has no matching compile_db.userspace entry "
-                f"(add `- compile_commands_json: …` with source: {rel_posix})"
+                f"(add `- compile_commands_json: ...` with source: {rel_posix})"
             )
     return issues
 
@@ -768,7 +771,7 @@ def clang_tidy_merge_build_dir(repo_root: Path) -> str:
 
 # POSIX / Linux UAPI model: shared project headers are a C surface (C naming, typedef,
 # extern "C"). C++ may include them but must not re-style them under C++ clang-tidy rules.
-# Extension-only: ``.h`` → c_compatible; ``.hpp``/``.hh``/``.hxx`` → cxx_only.
+# Extension-only: ``.h`` -> c_compatible; ``.hpp``/``.hh``/``.hxx`` -> cxx_only.
 C_COMPATIBLE_HEADER_SUFFIXES = frozenset({".h"})
 CXX_ONLY_HEADER_SUFFIXES = frozenset({".hpp", ".hh", ".hxx"})
 HeaderRole = str  # "c_compatible" | "cxx_only"
@@ -779,7 +782,7 @@ def firmware_compile_source_roots(repo_root: Path) -> tuple[str, ...]:
 
     Derived from each ``compile_db.firmware[].source`` field (independent of
     ``policy.shared_c_cxx_source_roots``, which only selects the shared C/C++ tidy
-    overlay). Host unit-test trees (``tests/…``) are excluded so they keep host
+    overlay). Host unit-test trees (``tests/...``) are excluded so they keep host
     CMake commands. ``esp-idf`` is still added when it is a scan source root
     (LiFi / ESP-IDF pilots) even if no firmware entry lists it yet.
     """
@@ -804,8 +807,8 @@ def header_role_for_path(path: Path, repo_root: Path) -> HeaderRole:
     """Classify a header for clang-tidy reporting (C surface vs C++-only).
 
     Extension-only (POSIX/UAPI-aligned):
-      ``.h``  → c_compatible (lint under C policy)
-      ``.hpp``/``.hh``/``.hxx`` → cxx_only (lint under C++ policy)
+      ``.h``  -> c_compatible (lint under C policy)
+      ``.hpp``/``.hh``/``.hxx`` -> cxx_only (lint under C++ policy)
 
     C++ surface must use ``.hpp``/``.hh``/``.hxx`` (no path-prefix overrides).
     """
@@ -863,7 +866,7 @@ def clang_tidy_header_filter_regex(
 
 
 # Unambiguous C++ surface in a ``.h`` that is still classified c_compatible.
-# Dual C/C++ headers that only use ``std::uintN_t`` are not matched — fix those in source.
+# Dual C/C++ headers that only use ``std::uintN_t`` are not matched -- fix those in source.
 # ``auto`` matches C++ deduction forms only (not C storage-class ``auto int x``).
 _CXX_IN_C_HEADER_RE = re.compile(
     r"(?m)^[ \t]*(?:"
@@ -912,7 +915,7 @@ def cxx_in_c_compatible_header_violations(
         if _CXX_IN_C_HEADER_RE.search(_strip_c_comments_for_header_role_scan(text)):
             rel = source_key(path, repo_root) or path.as_posix()
             violations.append(
-                f"{rel}: C++ surface in .h classified c_compatible — "
+                f"{rel}: C++ surface in .h classified c_compatible -- "
                 "rename to .hpp/.hh/.hxx"
             )
     return violations
@@ -922,7 +925,7 @@ def clang_tidy_header_filter_regex_for_overlay(
     repo_root: Path,
     overlay: dict[str, Any],
 ) -> str:
-    """Pick HeaderFilterRegex from overlay language (c → c_compatible, cxx → cxx_only)."""
+    """Pick HeaderFilterRegex from overlay language (c -> c_compatible, cxx -> cxx_only)."""
     language = str(overlay.get("language", "")).lower()
     if language in {"cxx", "c++"}:
         return clang_tidy_header_filter_regex(repo_root, role="cxx_only")

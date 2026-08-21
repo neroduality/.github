@@ -441,7 +441,7 @@ def verify_manifest_gate_markers(manifest: dict[str, Any]) -> list[str]:
 
 
 def verify_guide_table_coverage(manifest: dict[str, Any]) -> list[str]:
-    """Ensure Tables 1–2 + guide prose flags are fully listed in coverage.flags."""
+    """Ensure Tables 1-2 + guide prose flags are fully listed in coverage.flags."""
     issues: list[str] = []
     coverage = _coverage_block(manifest)
     required = {str(flag) for flag in coverage.get("flags", []) if flag}
@@ -522,7 +522,7 @@ def _cmake_root_standard_summary(root: dict[str, str]) -> str:
 
 def _print_hardeninglint_cmake_ok(config: dict[str, object]) -> None:
     roots = config.get("cmake_roots", [])
-    print(f"hardeninglint (cmake): OK — {len(roots)} CMake project root(s)")
+    print(f"hardeninglint (cmake): OK -- {len(roots)} CMake project root(s)")
     print("  role: OpenSSF flags in CMakeLists (define_hardening); not compile_db JSON inputs")
     for root in roots:
         if not isinstance(root, dict):
@@ -566,6 +566,12 @@ _PROBE_GATED_KEYS = ("compile_probe_gated", "link_probe_gated")
 _GENEX_GATED_KEYS = ("compile_genex_gated", "link_genex_gated")
 _DEFINITIONS_GENEX_GATED_KEY = "definitions_genex_gated"
 _VALID_FLAG_LANGUAGES = frozenset({"C", "CXX"})
+
+# Probe-gated flags that must ALSO be dropped under an instrumented sanitizer
+# build: -fhardened enables _FORTIFY_SOURCE (incompatible with the sanitizer
+# runtimes, and its fortified libc inlines defeat -Wl,--wrap test hooks), and
+# -Whardened would then warn (-> -Werror) that hardening is not in effect.
+_SANITIZER_INCOMPATIBLE_PROBE_FLAGS = frozenset({"-fhardened", "-Whardened"})
 
 
 def _substitute_language_probe(probe: str, language: str) -> str:
@@ -614,7 +620,7 @@ def _merge_compile_arch_blocks(blocks: tuple[dict[str, Any], ...]) -> list[str]:
     return merged
 
 
-# compile_arch keys → CMAKE_SYSTEM_PROCESSOR genex (host-only; matches audit arch filter).
+# compile_arch keys -> CMAKE_SYSTEM_PROCESSOR genex (host-only; matches audit arch filter).
 _COMPILE_ARCH_PROCESSOR_GENEX: dict[str, str] = {
     "x86_64_native": (
         "$<OR:$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>,"
@@ -2284,7 +2290,7 @@ def compile_db_openssf_audit_scope(
 
 def format_compile_db_openssf_audit_ok(scope: CompileDbOpenssfAuditScope) -> list[str]:
     return [
-        f"OK — {scope.audited_cc_files} scan C/C++ file(s) "
+        f"OK -- {scope.audited_cc_files} scan C/C++ file(s) "
         f"({scope.host_native_files} host-native, {scope.cross_compile_files} cross-compile)",
         "scope: all scan.source_roots; probe-gated anchors from host/firmware CMakeCache",
         f"flag anchors: up to {scope.host_audit_flag_count} (host-native) / "
@@ -2414,7 +2420,7 @@ def _coverage_definition_set(manifest: dict[str, Any]) -> set[str]:
     return set(_coverage_definition_list(manifest))
 
 
-# Mutually exclusive libc++ hardening modes — never emit more than one in flat Make.
+# Mutually exclusive libc++ hardening modes -- never emit more than one in flat Make.
 _LIBCPP_HARDENING_MODE_DEFS = frozenset(
     {
         "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST",
@@ -2525,7 +2531,7 @@ def generate_hardening_cmake(
     note_lines = _dial_note_lines(
         dial_note,
         [
-            "Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.",
+            "Generated from config/openssf-hardening-manifest.yaml -- do not hand-edit.",
             "Sync via policy.overrides.openssf-hardening (fail-on-change rewrite).",
         ],
     )
@@ -2569,7 +2575,17 @@ def generate_hardening_cmake(
         for flag, probe in probe_gated:
             if flag not in covered_flags:
                 continue
-            gated = f"$<$<BOOL:${{{probe}}}>:{flag}>"
+            if flag in _SANITIZER_INCOMPATIBLE_PROBE_FLAGS:
+                # -fhardened turns on _FORTIFY_SOURCE, which is incompatible with the
+                # instrumented sanitizer runtimes; its fortified libc inlines (e.g.
+                # poll() via <bits/poll2.h>) also bypass -Wl,--wrap test interception.
+                # Drop it (and the paired -Whardened) when a sanitizer is active.
+                gated = (
+                    f"$<$<AND:$<BOOL:${{{probe}}}>,"
+                    f"$<NOT:$<BOOL:${{HAVE_INSTRUMENTED_SANITIZER}}>>>:{flag}>"
+                )
+            else:
+                gated = f"$<$<BOOL:${{{probe}}}>:{flag}>"
             if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
                 link_flags.add(gated)
             else:
@@ -2675,14 +2691,14 @@ def generate_hardening_flags_mk(
         else:
             cppflags.append(f"-D{definition}")
     default_notes = [
-        "Generated from kit openssf-hardening-manifest + dials — do not hand-edit.",
+        "Generated from kit openssf-hardening-manifest + dials -- do not hand-edit.",
         "Arduino / Make consumers: include this file and append to build.extra_flags",
         "(or equivalent), e.g. NFC_BUILD_EXTRA_FLAGS += $(NERO_OPENSSF_CFLAGS)",
     ]
     if compile_commands_json and dial_note is None:
         default_notes[0] = (
             "Generated from kit openssf-hardening-manifest + dials for "
-            f"{compile_commands_json} — do not hand-edit."
+            f"{compile_commands_json} -- do not hand-edit."
         )
     note_lines = _dial_note_lines(dial_note, default_notes)
     cflags = " ".join(c_flags)
@@ -2705,7 +2721,7 @@ def generate_probes_cmake(manifest: dict[str, Any], *, repo_root: Path) -> str:
         _openssf_generated_preamble(
             repo_root,
             [
-                "Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.",
+                "Generated from config/openssf-hardening-manifest.yaml -- do not hand-edit.",
                 "Copy from .github/lint-c-cpp/cmake/; relax via policy.overrides.openssf-hardening.",
             ],
         ),
@@ -2724,7 +2740,17 @@ def generate_probes_cmake(manifest: dict[str, Any], *, repo_root: Path) -> str:
         '  if(${_sanitizer_var} MATCHES "-fsanitize")\n',
         "    set(HAVE_INSTRUMENTED_SANITIZER 1)\n",
         "  endif()\n",
-        "endforeach()\n\n",
+        "endforeach()\n",
+        "# Also detect sanitizers enabled via add_compile_options/add_link_options\n",
+        "# (directory-scoped) when this module is included after that setup, so the\n",
+        "# fortify / -fhardened gating below is not silently defeated.\n",
+        "if(NOT HAVE_INSTRUMENTED_SANITIZER)\n",
+        "  get_directory_property(_hardening_dir_compile_options COMPILE_OPTIONS)\n",
+        "  get_directory_property(_hardening_dir_link_options LINK_OPTIONS)\n",
+        '  if("${_hardening_dir_compile_options};${_hardening_dir_link_options}" MATCHES "-fsanitize")\n',
+        "    set(HAVE_INSTRUMENTED_SANITIZER 1)\n",
+        "  endif()\n",
+        "endif()\n\n",
     ]
 
     _append_compiler_probe_checks(lines, language="C", probes=c_probes)
@@ -2802,7 +2828,7 @@ def _expected_consumer_hardening_modules(
     repo_root: Path,
     kit_manifest: dict[str, Any],
 ) -> dict[str, str]:
-    """Map consumer cmake basename → expected file body (dialed generate)."""
+    """Map consumer cmake basename -> expected file body (dialed generate)."""
     from policy_overrides import (
         _by_compile_db_entries,
         apply_openssf_coverage_flag_overrides,
@@ -2827,7 +2853,7 @@ def _expected_consumer_hardening_modules(
             repo_root=repo_root,
             dial_note=(
                 "Generated from kit openssf-hardening-manifest + global "
-                "policy.overrides.openssf-hardening — do not hand-edit."
+                "policy.overrides.openssf-hardening -- do not hand-edit."
             ),
         )
     expected["CompilerHardeningProbes.cmake"] = generate_probes_cmake(
@@ -2851,7 +2877,7 @@ def _expected_consumer_hardening_modules(
             repo_root=repo_root,
             dial_note=(
                 f"Generated from kit openssf-hardening-manifest + dials for "
-                f"{compile_json} — do not hand-edit."
+                f"{compile_json} -- do not hand-edit."
             ),
         )
         flags_name = f"Hardening.flags.by-{compile_db_override_slug(compile_json)}.mk"
@@ -2918,7 +2944,7 @@ def sync_kit_cmake_regen(
     Same gate as license/yamllint/markdownlint: write in place, then ask to commit
     and re-run. Does not leave stale files as soft policy-only findings.
 
-    Never rewrites ``lint_kit/cmake`` — the kit install is shared read-only for
+    Never rewrites ``lint_kit/cmake`` -- the kit install is shared read-only for
     consumers; kit templates are updated only in the lint-c-cpp repo itself.
     """
     from format_fail_on_change import fail_on_change_error
@@ -3000,7 +3026,7 @@ def verify_hardening_include_wiring(
     """Fail closed: each Hardening adopter must include the dial module for its compile DB.
 
     Without this, dialed ``Hardening.by-<slug>.cmake`` files can exist while firmware/host
-    still ``include(Hardening.cmake)`` — lint/files look correct, binaries keep wrong flags.
+    still ``include(Hardening.cmake)`` -- lint/files look correct, binaries keep wrong flags.
 
     Firmware ``by_compile_db`` entries may wire via CMake (``Hardening.by-*.cmake``) **or**
     Make (``Hardening.flags.by-*.mk``) for Arduino-style toolchains.
@@ -3048,7 +3074,7 @@ def verify_hardening_include_wiring(
         if expected not in included:
             issues.append(
                 f"{rel}: must include cmake/{expected} for compile_db {compile_json} "
-                f"(found {included!r}) — dialed Hardening modules are build ground truth, "
+                f"(found {included!r}) -- dialed Hardening modules are build ground truth, "
                 "not lint-only"
             )
         # Using both plain + by-slug is ambiguous.

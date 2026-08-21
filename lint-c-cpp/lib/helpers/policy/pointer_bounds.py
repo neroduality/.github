@@ -99,10 +99,15 @@ def function_has_guard_for_index(
         return True
     if not re.fullmatch(r"\w+", expr):
         return False
+    # Numeric index: tolerate integer literal suffixes in the guard text
+    # (`count <= 1` and `count <= 1u` both credit index expr `1`).
+    expr_rx = (
+        rf"{re.escape(expr)}[uUlL]*" if re.fullmatch(r"\d+", expr) else re.escape(expr)
+    )
     bound = r"(?:\w*(?:len|cap|size|count|bytes)\w*|\w+\.size\s*\(\s*\))"
     return bool(
-        re.search(rf"\b{re.escape(expr)}\s*(?:<|<=|>=|>)\s*{bound}", body)
-        or re.search(rf"{bound}\s*(?:<|<=|>=|>)\s*\b{re.escape(expr)}\b", body)
+        re.search(rf"\b{expr_rx}\s*(?:<|<=|>=|>)\s*{bound}", body)
+        or re.search(rf"{bound}\s*(?:<|<=|>=|>)\s*\b{expr_rx}\b", body)
     )
 
 
@@ -344,6 +349,14 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
             "       uint16_t n) {\n"
             "  if (n < 8u) return false;\n"
             "  return payload[7] == 0;\n"
+            "}\n",
+            set(),
+        ),
+        "suffixed_literal_guard_ok.c": (
+            "int h(char **argv, int argc) {\n"
+            "  const size_t arg_count = (size_t)argc;\n"
+            "  if (arg_count <= 1u) return -1;\n"
+            "  return argv[1][0];\n"
             "}\n",
             set(),
         ),

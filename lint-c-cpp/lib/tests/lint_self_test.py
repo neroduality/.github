@@ -498,7 +498,7 @@ def central_job_paths(root: Path, job: str) -> list[Path]:
 
 
 def policy_prepared_paths(script_name: str, root: Path, job: str) -> tuple[list[Path], object]:
-    """Central scan-paths → prepare_paths → build_config (matches policy_runner)."""
+    """Central scan-paths -> prepare_paths -> build_config (matches policy_runner)."""
     from policy_prepare import build_config, prepare_paths
     from scan_policy import bootstrap_scan_manifest
 
@@ -837,6 +837,21 @@ class LintStepCoverage(unittest.TestCase):
         self.assertNotIn("readability-identifier-naming", enabled)
         self.assertIn("readability-magic-numbers", enabled)
 
+    def test_apply_clang_tidy_checks_overrides_strips_yaml_comments(self) -> None:
+        from policy_overrides import apply_clang_tidy_checks_overrides
+
+        kit_tidy = (CONFIG_DIR / ".clang-tidy-c").read_text(encoding="utf-8")
+        out = apply_clang_tidy_checks_overrides(
+            kit_tidy,
+            add=None,
+            remove=("readability-magic-numbers",),
+        )
+        checks = out.split("Checks:", 1)[1].split("WarningsAsErrors", 1)[0]
+        self.assertNotIn("pure aliases", checks)
+        self.assertNotIn("AllowedIdentifiers", checks)
+        self.assertIn("-cert-dcl37-c", checks)
+        self.assertIn("-readability-magic-numbers", checks)
+
     def test_materialize_override_configs_null_copies_kit_configs(self) -> None:
         from policy_overrides import lint_overrides_dir, materialize_override_configs
 
@@ -863,7 +878,7 @@ class LintStepCoverage(unittest.TestCase):
 
 
     def test_override_regression_format_tidy_openssf_global_and_by_compile_db(self) -> None:
-        """Regression: format / tidy / OpenSSF overrides — global and by_compile_db."""
+        """Regression: format / tidy / OpenSSF overrides -- global and by_compile_db."""
         import io
         from contextlib import redirect_stdout
         from unittest.mock import patch
@@ -1222,7 +1237,7 @@ class LintStepCoverage(unittest.TestCase):
                 if t.strip() and not t.strip().startswith("-") and t.strip() != ">"
             ]
             # firmware remove must not appear as a bare disable-only on host path from by_db;
-            # kit may already disable it — assert firmware cfg has explicit disable token.
+            # kit may already disable it -- assert firmware cfg has explicit disable token.
             self.assertIn("-bugprone-easily-swappable-parameters", fw_cfg)
 
             # materialize_clang_tidy_config_for_compile_db merges global+by_db from kit text.
@@ -1870,7 +1885,12 @@ class LintStepCoverage(unittest.TestCase):
         self.assertNotIn("library", block)
         self.assertNotIn("scan", block)
         self.assertNotIn("standards_fallback", block)
-        self.assertEqual(block["cli"]["enable"], ["warning"])
+        self.assertEqual(
+            block["cli"]["enable"], ["warning", "style", "performance", "portability"]
+        )
+        self.assertIn("--check-level=exhaustive", block["cli"]["flags"])
+        self.assertIn("--library=posix", block["cli"]["flags"])
+        self.assertIn("constParameterCallback", block["cli"]["suppressions"])
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1884,7 +1904,8 @@ class LintStepCoverage(unittest.TestCase):
             source_args = cppcheck_cli_common_args(cfg, lint_kit=kit, pass_cfg=cfg["passes"][0])
             self.assertIn("--quiet", source_args)
             self.assertTrue(any(item.startswith("--enable=warning") for item in source_args))
-            self.assertFalse(any(item.startswith("--library=") for item in source_args))
+            self.assertIn("--check-level=exhaustive", source_args)
+            self.assertIn("--library=posix", source_args)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1898,6 +1919,26 @@ class LintStepCoverage(unittest.TestCase):
             cfg = cppcheck_config(root, lint_kit=kit)
             self.assertEqual(cfg["standards"]["c"], "c23")
             self.assertEqual(cfg["standards"]["cxx"], "c++20")
+
+        # C26/C++26 map to cppcheck's spellings (post-C23 draft is "c2y"),
+        # and unknown future values fall back to the highest known standard.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_policy_test_manifest(root)
+            write(
+                root / "userspace/CMakeLists.txt",
+                'include("../cmake/Hardening.cmake")\n'
+                "define_hardening(\n  TARGET hardening\n  C_STANDARD 26 CXX_STANDARD 26)\n"
+                "target_link_libraries(app PRIVATE hardening)\n",
+            )
+            cfg = cppcheck_config(root, lint_kit=kit)
+            self.assertEqual(cfg["standards"]["c"], "c2y")
+            self.assertEqual(cfg["standards"]["cxx"], "c++26")
+
+        from consumer_manifest import _cppcheck_std_for_cmake
+
+        self.assertEqual(_cppcheck_std_for_cmake("c", 29), "c2y")
+        self.assertEqual(_cppcheck_std_for_cmake("cxx", 29), "c++26")
 
     def test_codespell_helper_config_uses_multiline_and_noise_filters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2051,7 +2092,7 @@ class LintStepCoverage(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("uvx"), "uvx required for python_lint self-test")
     def test_python_lint_self_test_flags_violation(self) -> None:
-        # The self-test proves ruff flags a known violation — "an equal error is thrown"
+        # The self-test proves ruff flags a known violation -- "an equal error is thrown"
         # for the python_lint job, matching the other jobs' pre-run self-tests.
         result = subprocess.run(
             [
@@ -2089,6 +2130,80 @@ class LintStepCoverage(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("compile_db is required", result.stderr)
+
+    def _run_manifest_validate(self, root: Path):
+        return subprocess.run(
+            [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"),
+             "--repo-root", str(root)],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def _write_userspace_only_manifest(self, root: Path, *, firmware: str, userspace: str,
+                                       jobs: list[str]) -> None:
+        (root / "core").mkdir(parents=True, exist_ok=True)
+        enabled = "enabled_lint_jobs:\n" + "".join(f"  - {job}\n" for job in jobs)
+        write(
+            root / ".github/lint-c-cpp.yaml",
+            "license_header: |\n  # test\n"
+            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+            "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
+            "  source_roots: [core]\n"
+            f"compile_db:\n  firmware: {firmware}\n  userspace: {userspace}\n"
+            + enabled
+            + "policy:\n  constants_headers: [limits.h]\n  nolint_allowed: null\n"
+            + _NULL_OVERRIDES_YAML +
+            "  unsafe_api:\n    header: sample_null.h\n"
+            "    include_headers: [attrs.h]\n"
+            "    wrapper_files: [include/sample/sample_null.h]\n"
+            "firmware_build: null\nspec_traceability: null\n"
+            "toolchain: null\nworkflow: null\nyamllint: null\n",
+        )
+
+    _USERSPACE_ONLY_JOBS = [
+        "license", "format", "openssf", "compile_db", "clang_tidy", "banned_cxx_heap",
+        "banned_libc_io", "null_nodiscard", "guard_clause_style", "pointer_bounds",
+        "raii_lifetime", "nolint_audit", "cppcheck",
+    ]
+
+    def test_manifest_validate_allows_userspace_only_compile_db(self) -> None:
+        """Userspace-only repos omit firmware (null) and pass precheck (no firmware misuse)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_userspace_only_manifest(
+                root,
+                firmware="null",
+                userspace="[{compile_commands_json: build/lint/userspace/compile_commands.json, "
+                          "source: '.', cmake_args: null}]",
+                jobs=self._USERSPACE_ONLY_JOBS,
+            )
+            result = self._run_manifest_validate(root)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_manifest_validate_rejects_empty_compile_db(self) -> None:
+        """Declaring no firmware and no userspace builds must fail (no silent skip)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_userspace_only_manifest(
+                root, firmware="[]", userspace="[]", jobs=self._USERSPACE_ONLY_JOBS,
+            )
+            result = self._run_manifest_validate(root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("compile_db declares no builds", result.stderr)
+
+    def test_manifest_validate_rejects_firmware_jobs_without_firmware(self) -> None:
+        """firmware_compile_db/firmware_build require a non-empty compile_db.firmware."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_userspace_only_manifest(
+                root,
+                firmware="[]",
+                userspace="[{compile_commands_json: build/lint/userspace/compile_commands.json, "
+                          "source: '.', cmake_args: null}]",
+                jobs=self._USERSPACE_ONLY_JOBS + ["firmware_compile_db"],
+            )
+            result = self._run_manifest_validate(root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("firmware_compile_db requires a non-empty compile_db.firmware", result.stderr)
 
     def test_compile_db_audit_flags_werror_only_via_override_dials(self) -> None:
         """``-Werror*`` stays required unless dial-removed (no silent diagnostics_gate)."""
@@ -2168,7 +2283,7 @@ class LintStepCoverage(unittest.TestCase):
         self.assertNotIn("fw/orphan/orphan.cpp", covered)
 
     def test_amalgamation_does_not_waive_in_command_flag_failures(self) -> None:
-        """Amalgamation may clear missing-entry only — never a failed flag audit."""
+        """Amalgamation may clear missing-entry only -- never a failed flag audit."""
         from hardening_verify import verify_compile_commands_openssf
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2191,7 +2306,7 @@ class LintStepCoverage(unittest.TestCase):
                     "command": f"/usr/bin/cc {weak} -c {host.resolve()}",
                     "file": str(host.resolve()),
                 },
-                # child has an entry that also fails flags — must not be waived by include.
+                # child has an entry that also fails flags -- must not be waived by include.
                 "core/child.c": {
                     "directory": str(root),
                     "command": f"/usr/bin/cc {weak} -c {child.resolve()}",
@@ -2279,7 +2394,7 @@ class LintStepCoverage(unittest.TestCase):
                 any("esp-idf/main" in item and by_name in item for item in issues),
                 issues,
             )
-            # Fix firmware include → wiring OK (CMake path; flags.mk optional).
+            # Fix firmware include -> wiring OK (CMake path; flags.mk optional).
             write(
                 root / "esp-idf/main/CMakeLists.txt",
                 f'include("${{CMAKE_CURRENT_SOURCE_DIR}}/../../cmake/{by_name}")\n'
@@ -2382,6 +2497,38 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn("-fcf-protection=full", body)
         self.assertIn("_hardening_host", body)
         self.assertIn("x86_64", body)
+
+    def test_generate_hardening_gates_fhardened_off_under_sanitizer(self) -> None:
+        """-fhardened/-Whardened must drop under instrumented sanitizers (they enable
+        _FORTIFY_SOURCE, which conflicts with the sanitizers and whose fortified libc
+        inlines defeat -Wl,--wrap test hooks); the probe must also see add_compile_options."""
+        from hardening_verify import (
+            generate_hardening_cmake,
+            generate_probes_cmake,
+            load_hardening_manifest,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            manifest = load_hardening_manifest(LINT_KIT)
+            body = generate_hardening_cmake(manifest, repo_root=license_root)
+            probes = generate_probes_cmake(manifest, repo_root=license_root)
+        # -fhardened is gated on both its probe AND NOT instrumented-sanitizer.
+        self.assertIn(
+            "$<$<AND:$<BOOL:${HAVE_C_FHARDENED}>,"
+            "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-fhardened>",
+            body,
+        )
+        self.assertNotIn("$<$<BOOL:${HAVE_C_FHARDENED}>:-fhardened>", body)
+        self.assertIn(
+            "$<$<AND:$<BOOL:${HAVE_C_WHARDENED}>,"
+            "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-Whardened>",
+            body,
+        )
+        # The probe also detects sanitizers set via add_compile_options/add_link_options.
+        self.assertIn("get_directory_property(_hardening_dir_compile_options COMPILE_OPTIONS)", probes)
+        self.assertIn("-fsanitize", probes)
 
     def test_usable_openssf_probe_cache_ignores_unrelated_cmakecache(self) -> None:
         """Caches without OpenSSF HAVE_* keys do not fail-closed probe-gated audit."""
@@ -3349,7 +3496,7 @@ class LintStepCoverage(unittest.TestCase):
             "lint_kit_format_toolchain_self_test",
             "shellcheck -S warning",
             'run bash "${toolchain}/codespell.sh"',
-            'section compile_db "Generate compile databases (host configure → merge → OpenSSF audit)"',
+            'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF audit)"',
             openssf_section,
             clang_tidy_section,
             memory_section,
@@ -3493,7 +3640,7 @@ class LintStepCoverage(unittest.TestCase):
             "shellcheck -S warning",
             'run bash "${toolchain}/codespell.sh"',
             'if ((custom_lints_only == 0)); then',
-            'section compile_db "Generate compile databases (host configure → merge → OpenSSF audit)"',
+            'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF audit)"',
             'section openssf "OpenSSF hardening (validate manifest + hardeninglint)"',
             'section clang_tidy "Run clang-tidy"',
             'section banned_cxx_heap "Enforce no C++ new/delete (including unsafe wrappers; complements clang-tidy/cppcheck)"',
@@ -3667,6 +3814,10 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn("GlobalConstantPrefix\n    value: k", cxx_text)
         self.assertIn("ProtectedMemberSuffix", cxx_text)
         self.assertIn("ScopedEnumConstantPrefix", cxx_text)
+        for text in (cxx_text, shared_text):
+            self.assertIn("LocalConstantCase\n    value: lower_case", text)
+            self.assertNotIn("LocalConstantPrefix\n    value: k", text)
+            self.assertNotIn("aNy_CasE", text)
         self.assertIn("FunctionCase\n    value: CamelCase", shared_text)
         for text in (c_text, cxx_text, shared_text):
             self.assertIn("-bugprone-unsafe-functions,", text)
@@ -3862,7 +4013,7 @@ class LintStepCoverage(unittest.TestCase):
             helper._print_hardeninglint_cmake_ok(config)
         self.assertEqual(
             buf.getvalue(),
-            "hardeninglint (cmake): OK — 2 CMake project root(s)\n"
+            "hardeninglint (cmake): OK -- 2 CMake project root(s)\n"
             "  role: OpenSSF flags in CMakeLists (define_hardening); not compile_db JSON inputs\n"
             "  esp-idf/main/CMakeLists.txt: C17\n"
             "  userspace/CMakeLists.txt: C23, CXX23\n",
@@ -4599,7 +4750,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                     cross_templates=(cross_entry,),
                 )
                 self.assertIs(tmpl, cross_entry)
-                # Same path already has a host row — still must pick cross for tidy rewrite.
+                # Same path already has a host row -- still must pick cross for tidy rewrite.
                 tmpl_existing = compile_db_lint._template_for_target(
                     by_file,
                     root / "firmware/src/foo.cpp",

@@ -15,9 +15,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Typo detection via codespell — no hunspell / project wordlist maintenance.
+# Typo detection via codespell -- no hunspell / project wordlist maintenance.
 #
-# codespell flags common misspellings (teh, recieve, …), not unknown vocabulary.
+# codespell flags common misspellings (teh, recieve, ...), not unknown vocabulary.
 # Markdown code fences and HTML license comments are stripped; URLs and hex literals
 # are ignored so technical docs stay low-noise without a custom dictionary.
 #
@@ -25,7 +25,7 @@
 # from tool-versions.yaml; this helper never installs or upgrades tools.
 #
 # Usage:
-#   bash lib/helpers/toolchain/codespell.sh [paths…]
+#   bash lib/helpers/toolchain/codespell.sh [paths...]
 #   bash lib/helpers/toolchain/codespell.sh --check-config
 #
 # Sourceable helpers (install-linux-deps.sh):
@@ -78,7 +78,7 @@ lint_kit_codespell_main() {
 
   usage() {
     cat <<'EOF'
-Usage: lib/helpers/toolchain/codespell.sh [OPTIONS] [PATH …]
+Usage: lib/helpers/toolchain/codespell.sh [OPTIONS] [PATH ...]
 
 Run codespell with repository-standard filters. Paths default to all
 Markdown/YAML under the repo (respecting scan exclusions) plus C/C++ sources
@@ -96,12 +96,12 @@ EOF
   repo_root="${LINT_REPO_ROOT:-$(pwd)}"
   repo_root="$(cd -- "$repo_root" && pwd)"
 
-  # License HTML blocks and fenced code (inline `code` stays checked — usually prose).
+  # License HTML blocks and fenced code (inline `code` stays checked -- usually prose).
   # shellcheck disable=SC2016
   local IGNORE_MULTILINE_REGEX='(?s)<!--.*?-->|\`\`\`.*?(\`\`\`|$)'
 
   # URLs, hex, email-ish tokens, long uppercase acronyms, snake_case identifiers,
-  # and C/C++ #include directive paths (compiler-verified filenames, not prose —
+  # and C/C++ #include directive paths (compiler-verified filenames, not prose --
   # spell-checking them only false-positives on library/vendor names like Synopsys).
   # shellcheck disable=SC2016
   local IGNORE_REGEX='(\bhttps?://\S+\b|\b0x[0-9A-Fa-f]+\b|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|\b[A-Z][A-Z0-9_]{2,}\b|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|^[ \t]*#[ \t]*include[ \t]*[<"][^">]*[">])'

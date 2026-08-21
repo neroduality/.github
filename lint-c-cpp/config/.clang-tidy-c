@@ -20,10 +20,12 @@
 Checks: >
   clang-diagnostic-*,
   clang-analyzer-*,
+  android-cloexec-*,
   bugprone-*,
   cert-*,
   concurrency-*,
   cppcoreguidelines-*,
+  misc-*,
   modernize-*,
   performance-*,
   portability-*,
@@ -37,6 +39,10 @@ Checks: >
   misc-misleading-bidirectional,
   misc-confusable-identifiers,
   misc-misleading-identifier,
+  -android-cloexec-pipe,
+  -misc-header-include-cycle,
+  -misc-include-cleaner,
+  -misc-no-recursion,
   -modernize-use-trailing-return-type,
   -modernize-use-std-print,
   -readability-identifier-length,
@@ -78,6 +84,8 @@ Checks: >
   -cppcoreguidelines-macro-to-enum,
   -cppcoreguidelines-macro-usage,
   -cert-err33-c,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
   -concurrency-mt-unsafe,
   -portability-avoid-pragma-once
 
@@ -116,6 +124,20 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.GlobalFunctionCase
     value: lower_case
+  # External-ABI symbols whose names are fixed by an outside contract and cannot
+  # follow Google naming: linker --wrap interceptors (__wrap_/__real_) and the
+  # libFuzzer entry point (LLVMFuzzer*). Scoped allowlist only -- every other
+  # identifier stays fully enforced, and this is not a general naming relaxation.
+  - key: readability-identifier-naming.GlobalFunctionIgnoredRegexp
+    value: '^(__wrap_|__real_|LLVMFuzzer).*'
+  - key: readability-identifier-naming.FunctionIgnoredRegexp
+    value: '^(__wrap_|__real_|LLVMFuzzer).*'
+  # The __wrap_/__real_ symbols also start with a reserved '__'. bugprone-reserved
+  # -identifier honors this allowlist; its cert-dcl37-c/cert-dcl51-cpp aliases do
+  # NOT inherit the option in clang-tidy, so those aliases are disabled in Checks
+  # above (the primary bugprone-reserved-identifier check still enforces the rule).
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: '^__wrap_.*$;^__real_.*$'
   - key: readability-identifier-naming.ParameterCase
     value: lower_case
   - key: readability-identifier-naming.VariableCase

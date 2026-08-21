@@ -42,7 +42,7 @@ LINT_FIX_HINT = (
     "Full banned set: scan_policy.BANNED_C_API_NAMES (complements clang-tidy unsafe)."
 )
 LINT_OK_DETAIL = (
-    "  (wrapper_files waive only intentional non-heap APIs; complements clang-tidy unsafe — "
+    "  (wrapper_files waive only intentional non-heap APIs; complements clang-tidy unsafe -- "
     "libc bans from scan_policy.BANNED_C_API_NAMES; also C++ streams and fd stdout/stderr)"
 )
 

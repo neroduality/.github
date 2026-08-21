@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Generated from config/openssf-hardening-manifest.yaml — do not hand-edit.
+# Generated from config/openssf-hardening-manifest.yaml -- do not hand-edit.
 # Copy from .github/lint-c-cpp/cmake/; relax via policy.overrides.openssf-hardening.
 #
 include(CheckCCompilerFlag)
@@ -33,6 +33,16 @@ foreach(_sanitizer_var IN ITEMS
     set(HAVE_INSTRUMENTED_SANITIZER 1)
   endif()
 endforeach()
+# Also detect sanitizers enabled via add_compile_options/add_link_options
+# (directory-scoped) when this module is included after that setup, so the
+# fortify / -fhardened gating below is not silently defeated.
+if(NOT HAVE_INSTRUMENTED_SANITIZER)
+  get_directory_property(_hardening_dir_compile_options COMPILE_OPTIONS)
+  get_directory_property(_hardening_dir_link_options LINK_OPTIONS)
+  if("${_hardening_dir_compile_options};${_hardening_dir_link_options}" MATCHES "-fsanitize")
+    set(HAVE_INSTRUMENTED_SANITIZER 1)
+  endif()
+endif()
 
 if(CMAKE_C_COMPILER)
   check_c_compiler_flag(-Wbidi-chars=any HAVE_C_WBIDI_CHARS_ANY)

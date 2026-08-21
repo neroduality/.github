@@ -276,7 +276,7 @@ def iter_required_compile_command_json(
         else:
             hint = (
                 "run configure-compile-db "
-                f"(CMake export for source {detail!r} → {path.relative_to(repo_root).as_posix()})"
+                f"(CMake export for source {detail!r} -> {path.relative_to(repo_root).as_posix()})"
             )
         yield RequiredCompileDbArtifact(
             path=path,
@@ -455,10 +455,10 @@ def amalgamation_included_source_keys(
     """Repo-relative keys of source files pulled into a compiled TU via ``#include``.
 
     Unity/amalgamation builds compile one wrapper TU that ``#include``s sibling ``.c``/``.cpp``
-    sources — quoted (``#include "foo.cpp"``) or via a ``-D``-selected macro path
-    (``#include MACRO(BOARD_UNIT)``) — resolved against the TU's own dir and its ``-I``/
+    sources -- quoted (``#include "foo.cpp"``) or via a ``-D``-selected macro path
+    (``#include MACRO(BOARD_UNIT)``) -- resolved against the TU's own dir and its ``-I``/
     ``-iquote`` dirs. Those included sources are never standalone TUs, so they carry no compile
-    DB entry of their own — yet their object code (and hardening flags) come from the including
+    DB entry of their own -- yet their object code (and hardening flags) come from the including
     TU. Callers pass only hardened host TUs, so every returned key is genuinely compiled with
     the required flags.
     """

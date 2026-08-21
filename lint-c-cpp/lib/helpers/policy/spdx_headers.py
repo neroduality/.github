@@ -19,7 +19,7 @@
 
 The manifest ``license_header`` block is the sole corpus. Comment markers (``#`` /
 ``//``) in that blob are stripped; the checker re-applies the style for each file
-kind and requires a contiguous exact match of every configured line — not merely
+kind and requires a contiguous exact match of every configured line -- not merely
 an SPDX identifier.
 """
 

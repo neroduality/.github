@@ -142,7 +142,7 @@ def _enum_body_line_set(text: str) -> frozenset[int]:
 
 # Anonymous, non-typedef enum bodies only: their members are plain constants that
 # can be relocated. Members of a NAMED or typedef'd enum define a type and must
-# never be "moved to a .c/.cpp" — doing so would break the enum type.
+# never be "moved to a .c/.cpp" -- doing so would break the enum type.
 _ANON_ENUM_OPEN_RE = re.compile(r"(?<![A-Za-z0-9_])enum\s*\{")
 
 

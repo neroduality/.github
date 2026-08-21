@@ -45,7 +45,7 @@ lint_kit_clang_format_hint() {
   printf '%s\n' \
     'hint: INSTALL_DEPS=1 bash make/install-linux-deps.sh' \
     "      or: apt install clang-format-${LINT_KIT_CLANG_TIDY_PREFERRED_MAJOR} clang-format-20" \
-    '      or: install clang-tools-extra (Fedora ≥43)' >&2
+    '      or: install clang-tools-extra (Fedora >=43)' >&2
 }
 
 lint_kit_scan_build_hint() {
