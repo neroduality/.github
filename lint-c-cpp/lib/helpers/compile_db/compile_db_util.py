@@ -25,10 +25,11 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from consumer_manifest import (
     compile_db_firmware_build_commands,
@@ -270,8 +271,10 @@ def iter_required_compile_command_json(
             continue
         if kind == "firmware":
             commands = compile_db_firmware_build_commands(repo_root)
-            hint = "run: " + "; ".join(commands) if commands else (
-                "set compile_db.firmware.commands in .github/lint-c-cpp.yaml"
+            hint = (
+                "run: " + "; ".join(commands)
+                if commands
+                else ("set compile_db.firmware.commands in .github/lint-c-cpp.yaml")
             )
         else:
             hint = (
@@ -297,9 +300,7 @@ def verify_required_compile_commands(
         return 1
     missing = [
         item
-        for item in iter_required_compile_command_json(
-            repo_root, include_firmware=include_firmware
-        )
+        for item in iter_required_compile_command_json(repo_root, include_firmware=include_firmware)
         if not item.path.is_file()
     ]
     if not missing:
@@ -381,8 +382,10 @@ def compile_db_index_keys(entries: list[dict[str, Any]], repo_root: Path) -> set
 
 
 _INCLUDE_QUOTED_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]+"([^"]+)"', re.MULTILINE)
-_INCLUDE_MACRO_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]+([A-Za-z_]\w*(?:[ \t]*\([^)\n]*\))?)[ \t]*$', re.MULTILINE)
-_IDENTIFIER_RE = re.compile(r'[A-Za-z_]\w*')
+_INCLUDE_MACRO_RE = re.compile(
+    r"^[ \t]*#[ \t]*include[ \t]+([A-Za-z_]\w*(?:[ \t]*\([^)\n]*\))?)[ \t]*$", re.MULTILINE
+)
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*")
 _AMALGAMATION_SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
 
 
@@ -402,7 +405,7 @@ def _command_quote_include_dirs(command: str, repo_root: Path) -> list[Path]:
                 index += 1
                 break
             if token.startswith(flag) and len(token) > len(flag):
-                dirs.append(Path(token[len(flag):]))
+                dirs.append(Path(token[len(flag) :]))
                 break
         index += 1
     resolved: list[Path] = []
@@ -528,6 +531,7 @@ def public_compile_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Drop kit-private keys (e.g. provenance) before writing clang/cppcheck JSON."""
     return {key: value for key, value in entry.items() if key in _PUBLIC_COMPILE_ENTRY_KEYS}
 
+
 def _merge_compile_entries(
     by_file: dict[str, dict[str, Any]],
     db_path: Path,
@@ -624,7 +628,7 @@ def load_richest_compile_entries(repo_root: Path) -> dict[str, dict[str, Any]]:
 
 
 def assert_compile_db_entries_in_scan_scope(
-    entries: list[dict[str, Any]],
+    entries: list[Any],
     repo_root: Path,
     *,
     label: str,
@@ -819,7 +823,7 @@ def count_cc_paths_by_scan_source_root(paths: list[Path], repo_root: Path) -> di
     """Count C/C++ scan paths grouped by longest matching ``scan.source_roots`` entry."""
     from consumer_manifest import scan_source_roots
 
-    counts = {root: 0 for root in scan_source_roots(repo_root)}
+    counts = dict.fromkeys(scan_source_roots(repo_root), 0)
     for path in paths:
         rel = source_key(path, repo_root)
         if rel is None:
@@ -835,5 +839,7 @@ def count_cc_paths_by_scan_source_root(paths: list[Path], repo_root: Path) -> di
 def format_source_root_entry_counts(counts: dict[str, int], repo_root: Path) -> str:
     from consumer_manifest import scan_source_roots
 
-    parts = [f"{root}:{counts[root]}" for root in scan_source_roots(repo_root) if counts.get(root, 0)]
+    parts = [
+        f"{root}:{counts[root]}" for root in scan_source_roots(repo_root) if counts.get(root, 0)
+    ]
     return ", ".join(parts) if parts else "(none)"

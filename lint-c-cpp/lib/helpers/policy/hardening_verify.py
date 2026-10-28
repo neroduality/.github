@@ -20,13 +20,15 @@
 from __future__ import annotations
 
 import argparse
-import json
+import contextlib
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,28 +36,40 @@ from typing import Any
 try:
     import yaml
 except ImportError:
-    yaml = None  # type: ignore[assignment]
+    yaml = None
 
 _LINT_LIB = Path(__file__).resolve().parents[2]
 _DEFAULT_LINT_KIT = _LINT_LIB.parent
 if str(_LINT_LIB) not in sys.path:
     sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath
+from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
 
 _bootstrap_lint_pythonpath()
+
+from policy_overrides import (  # noqa: E402  (needs bootstrap above)
+    OPENSSF_HOST_ONLY_GENEX_FLAGS,
+    OPENSSF_HOST_ONLY_PROBE_FLAGS,
+    normalize_openssf_cross_opt_in,
+)
+
 _POLICY_DIR = Path(__file__).resolve().parent
 if str(_POLICY_DIR) not in sys.path:
     sys.path.insert(0, str(_POLICY_DIR))
-from compile_db_util import (
+from compile_db_util import (  # noqa: E402
     cmake_generator,
     entry_command,
     is_cross_compile_command,
     storage_key_prefers_firmware_compile,
 )
-from repo_paths import source_key
-from consumer_manifest import discover_hardening_cmake_roots
-from policy_paths import add_hardening_path_args, central_scan_paths, load_cmake_paths, load_paths
-from scan_policy import JOB_CMAKE, JOB_SOURCE
+from consumer_manifest import discover_hardening_cmake_roots  # noqa: E402
+from policy_paths import (  # noqa: E402
+    add_hardening_path_args,
+    central_scan_paths,
+    load_cmake_paths,
+    load_paths,
+)
+from repo_paths import source_key  # noqa: E402
+from scan_policy import JOB_CMAKE, JOB_SOURCE  # noqa: E402
 
 DEFAULT_REQUIRED_MODULES = (
     "Hardening.cmake",
@@ -67,13 +81,24 @@ FORBIDDEN_CMAKE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\badd_compile_options\s*\([^)]*-fPIC\b"), "raw -fPIC in CMakeLists"),
     (re.compile(r"\badd_link_options\s*\([^)]*-pie\b"), "raw -pie in CMakeLists"),
     (re.compile(r"\badd_link_options\s*\([^)]*-shared\b"), "raw -shared in CMakeLists"),
-    (re.compile(r"\badd_(compile|link)_options\s*\([^)]*-D_FORTIFY_SOURCE\b"), "raw _FORTIFY_SOURCE"),
+    (
+        re.compile(r"\badd_(compile|link)_options\s*\([^)]*-D_FORTIFY_SOURCE\b"),
+        "raw _FORTIFY_SOURCE",
+    ),
     (re.compile(r"\badd_link_options\s*\([^)]*LINKER:-z,relro\b"), "raw relro link flag"),
     (re.compile(r"\badd_link_options\s*\([^)]*LINKER:-z,now\b"), "raw now link flag"),
     (re.compile(r"\badd_link_options\s*\([^)]*LINKER:-z,nodlopen\b"), "raw nodlopen link flag"),
-    (re.compile(r"\badd_link_options\s*\([^)]*LINKER:-z,noexecstack\b"), "raw noexecstack link flag"),
+    (re.compile(r"\bCMAKE_(?:INSTALL|BUILD)_RPATH\b"), "CMAKE rpath setting"),
+    (re.compile(r"-Wl,(?:-rpath|--rpath)\b"), "raw -Wl,-rpath"),
+    (
+        re.compile(r"\badd_link_options\s*\([^)]*LINKER:-z,noexecstack\b"),
+        "raw noexecstack link flag",
+    ),
     (re.compile(r"\binclude\s*\([^)]*HostHardening\.cmake"), "legacy HostHardening.cmake include"),
-    (re.compile(r"\binclude\s*\([^)]*CompilerHardeningProbes\.cmake"), "legacy CompilerHardeningProbes.cmake include"),
+    (
+        re.compile(r"\binclude\s*\([^)]*CompilerHardeningProbes\.cmake"),
+        "legacy CompilerHardeningProbes.cmake include",
+    ),
     (re.compile(r"\bdefine_host_hardening\s*\("), "legacy define_host_hardening() call"),
     (re.compile(r"\bhost_hardening\b"), "legacy host_hardening target name"),
 )
@@ -86,6 +111,8 @@ GENEX_GATE_ALIASES: dict[str, list[str]] = {
     "_hardening_consumer_exe": ["TARGET_PROPERTY:TYPE", "EXECUTABLE"],
     "_hardening_consumer_shared": ["TARGET_PROPERTY:TYPE", "SHARED_LIBRARY"],
     "_hardening_fortify_cfg": ["CONFIG:Release", "CONFIG:RelWithDebInfo", "CONFIG:MinSizeRel"],
+    # Speed-optimized configs: MinSizeRel's -Os must not be overridden by -O2.
+    "_hardening_speed_cfg": ["CONFIG:Release", "CONFIG:RelWithDebInfo"],
     "_hardening_production_cfg": ["CONFIG:Production"],
     "_hardening_relwithdebinfo_cfg": ["CONFIG:RelWithDebInfo"],
     "_hardening_debug_cfg": ["CONFIG:Debug"],
@@ -139,6 +166,7 @@ OPENSSF_TABLE2_FLAGS = frozenset(
         "-fstack-protector-strong",
         "-fcf-protection=full",
         "-mbranch-protection=standard",
+        "-fzero-call-used-regs=used-gpr",
         "LINKER:-z,nodlopen",
         "LINKER:-z,noexecstack",
         "LINKER:-z,relro",
@@ -171,7 +199,7 @@ OPENSSF_PROSE_FLAGS = frozenset(
     {
         "-Whardened",
         "-Werror=trampolines",
-        "-fzero-init-padding-bits=union",
+        "-fzero-init-padding-bits=unions",
     }
 )
 FORBIDDEN_ENVIRONMENT_PROBES = frozenset({"HAVE_NATIVE_USERSPACE", "HAVE_SHARED_LIBRARY"})
@@ -355,7 +383,7 @@ def verify_coverage_cmake_parity(manifest: dict[str, Any]) -> list[str]:
     return issues
 
 
-def verify_manifest_top_level_schema(manifest: dict[str, Any]) -> list[str]:
+def verify_manifest_top_level_schema(manifest: object) -> list[str]:
     """Top-level manifest keys are positive-only."""
     issues: list[str] = []
     if not isinstance(manifest, dict):
@@ -462,7 +490,8 @@ def verify_guide_table_coverage(manifest: dict[str, Any]) -> list[str]:
         )
     for flag in sorted(OPENSSF_PROSE_FLAGS - required):
         issues.append(
-            f"openssf-hardening-manifest.yaml: guide prose flag {flag!r} missing from coverage.flags"
+            f"openssf-hardening-manifest.yaml: guide prose flag {flag!r} missing from "
+            "coverage.flags"
         )
     return issues
 
@@ -520,7 +549,7 @@ def _cmake_root_standard_summary(root: dict[str, str]) -> str:
     return ", ".join(labels) if labels else "(no standard declared)"
 
 
-def _print_hardeninglint_cmake_ok(config: dict[str, object]) -> None:
+def _print_hardeninglint_cmake_ok(config: dict[str, Any]) -> None:
     roots = config.get("cmake_roots", [])
     print(f"hardeninglint (cmake): OK -- {len(roots)} CMake project root(s)")
     print("  role: OpenSSF flags in CMakeLists (define_hardening); not compile_db JSON inputs")
@@ -530,7 +559,7 @@ def _print_hardeninglint_cmake_ok(config: dict[str, object]) -> None:
         print(f"  {root['file']}: {_cmake_root_standard_summary(root)}")
 
 
-def hardening_config(repo_root: Path) -> dict[str, object]:
+def hardening_config(repo_root: Path) -> dict[str, Any]:
     return {
         "interface_target": "hardening",
         "cmake_roots": discover_hardening_cmake_roots(repo_root),
@@ -540,10 +569,12 @@ def hardening_config(repo_root: Path) -> dict[str, object]:
 def _flag_pattern(label: str) -> re.Pattern[str]:
     if label.startswith("LINKER:"):
         return re.compile(re.escape(label))
-    if label.startswith("-D") or label.startswith("-U"):
+    if label.startswith(("-D", "-U")):
         return re.compile(re.escape(label))
     token = re.escape(label)
-    return re.compile(rf"(?:^|[\s:>]){token}(?:[\s\"<,]|$)")
+    # Trailing ``>`` closes a genex (``$<...:-pie>``); without it the gating audit
+    # never saw genex-wrapped bare flags and -pie went unaudited.
+    return re.compile(rf"(?:^|[\s:>]){token}(?:[\s\"<,>]|$)")
 
 
 def extract_hardening_tokens(text: str) -> set[str]:
@@ -571,7 +602,54 @@ _VALID_FLAG_LANGUAGES = frozenset({"C", "CXX"})
 # build: -fhardened enables _FORTIFY_SOURCE (incompatible with the sanitizer
 # runtimes, and its fortified libc inlines defeat -Wl,--wrap test hooks), and
 # -Whardened would then warn (-> -Werror) that hardening is not in effect.
+# _FORTIFY_SOURCE needs optimization too, so both are also limited to the
+# optimized configs (_hardening_fortify_cfg); the compile-DB audit mirrors this.
 _SANITIZER_INCOMPATIBLE_PROBE_FLAGS = frozenset({"-fhardened", "-Whardened"})
+_SANITIZER_INCOMPATIBLE_PROBE_GATES = (
+    *GENEX_GATE_ALIASES["_hardening_fortify_cfg"],
+    "NOT_INSTRUMENTED_SANITIZER",
+)
+
+# Probe-gated flags that are host-only by default (not emitted on cross builds).
+# DT_RELR relative relocations need a dynamic loader (glibc >= 2.36) and are
+# meaningless for bare-metal/firmware and old cross targets, so gate them like the
+# other -z link flags while keeping the linker-support probe. A consumer whose
+# cross sysroots are known-good opts individual flags back in for cross builds via
+# ``policy.overrides.openssf-hardening.cross`` (the libc probe below still applies).
+_HOST_ONLY_PROBE_FLAGS = OPENSSF_HOST_ONLY_PROBE_FLAGS
+
+# Genex-gated link flags whose ``CMAKE_CROSSCOMPILING`` term the same ``cross`` dial
+# lifts (-pie / -z noexecstack / -z now / -z relro): a Linux userspace cross port needs
+# them for PIE + RELRO + BIND_NOW + non-exec stack exactly like a native build, while
+# bare-metal firmware consumers keep the default host-only gating.
+_HOST_ONLY_GENEX_FLAGS = OPENSSF_HOST_ONLY_GENEX_FLAGS
+
+# Sysroot libc capability probes paired with a flag. The flag is emitted only when
+# the active toolchain's libc can load the result; the linker-support probe alone is
+# not sufficient. For DT_RELR, GNU ld adds a GLIBC_ABI_DT_RELR verneed whenever it
+# links against glibc (bfd/elflink.c, _bfd_elf_link_add_dt_relr_dependency) even if
+# that libc predates 2.36, so the link succeeds and the loader then rejects the
+# binary ("version `GLIBC_ABI_DT_RELR' not found"). This applies to native builds
+# too (e.g. binutils 2.38 + glibc 2.35), which is why the gate is unconditional.
+_LIBC_PROBE_BY_FLAG: dict[str, str] = {
+    "LINKER:-z,pack-relative-relocs": "HAVE_LIBC_DT_RELR",
+}
+_LIBC_PROBES = frozenset(_LIBC_PROBE_BY_FLAG.values())
+_LIBC_DT_RELR_PROBE_SOURCE = (
+    "#include <features.h>\n"
+    "#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)\n"
+    "#if !__GLIBC_PREREQ(2, 36)\n"
+    "#error DT_RELR needs glibc >= 2.36 (GLIBC_ABI_DT_RELR)\n"
+    "#endif\n"
+    "#else\n"
+    "#error DT_RELR loader support is only probed for glibc\n"
+    "#endif\n"
+    "int main(void) { return 0; }\n"
+)
+_LIBC_PROBE_SOURCES: dict[str, str] = {
+    "HAVE_LIBC_DT_RELR": _LIBC_DT_RELR_PROBE_SOURCE,
+}
+normalize_cross_opt_in = normalize_openssf_cross_opt_in
 
 
 def _substitute_language_probe(probe: str, language: str) -> str:
@@ -748,9 +826,9 @@ def _flag_set_block(manifest: dict[str, Any], language: str) -> dict[str, Any]:
             merged[key] = [{"flag": flag, "probe": probe} for flag, probe in entries]
 
     for key in _GENEX_GATED_KEYS:
-        entries = _merge_genex_gated_blocks(blocks, key)
-        if entries:
-            merged[key] = [{"flag": flag, "gate_requires": gate} for flag, gate in entries]
+        genex_entries = _merge_genex_gated_blocks(blocks, key)
+        if genex_entries:
+            merged[key] = [{"flag": flag, "gate_requires": gate} for flag, gate in genex_entries]
 
     def_entries = _merge_definitions_genex_gated_blocks(blocks)
     if def_entries:
@@ -845,7 +923,7 @@ def _probe_defined_by_check_module(probes_text: str, probe: str) -> bool:
         return probe in probes_text
     if probe not in probes_text:
         return False
-    for match in re.finditer(
+    for _match in re.finditer(
         rf"check_(?:c|cxx)_compiler_flag\s*\([^)]*\b{re.escape(probe)}\b|"
         rf"check_linker_flag\s*\([^)]*\b{re.escape(probe)}\b",
         probes_text,
@@ -936,7 +1014,7 @@ def _extract_cmake_call_inner(text: str, open_paren_index: int) -> str:
         index += 1
     if depth != 0:
         return ""
-    return text[open_paren_index:index - 1]
+    return text[open_paren_index : index - 1]
 
 
 def _parse_target_link_libraries(text: str) -> dict[str, list[tuple[str, str]]]:
@@ -1018,7 +1096,7 @@ def repo_uses_cxx(
 
 def verify_cxx_hardening_adoption(
     repo_root: Path,
-    config: dict[str, object],
+    config: dict[str, Any],
     *,
     source_paths: list[Path],
     cmake_paths: list[Path],
@@ -1030,14 +1108,15 @@ def verify_cxx_hardening_adoption(
         if str(root.get("cxx_standard") or ""):
             return issues
     issues.append(
-        "project uses C++ (.cpp sources or project(... CXX)) but no define_hardening() root sets CXX_STANDARD"
+        "project uses C++ (.cpp sources or project(... CXX)) but no define_hardening() root sets "
+        "CXX_STANDARD"
     )
     return issues
 
 
 def verify_target_hardening_links(
     repo_root: Path,
-    config: dict[str, object],
+    config: dict[str, Any],
     *,
     cmake_paths: list[Path],
 ) -> list[str]:
@@ -1076,7 +1155,7 @@ def verify_target_hardening_links(
 def verify_hardening_flags(
     repo_root: Path,
     manifest: dict[str, Any],
-    config: dict[str, object],
+    config: dict[str, Any],
 ) -> list[str]:
     issues: list[str] = []
     hardening_path = repo_root / _consumer_cmake_dir(manifest) / "Hardening.cmake"
@@ -1183,7 +1262,10 @@ def _line_satisfies_genex_gate(line: str, gate_requires: list[str]) -> bool:
                 continue
             return False
         if marker == "CONFIG:Release":
-            if "CONFIG:Release" in line or "_hardening_fortify_cfg" in line:
+            if any(
+                token in line
+                for token in ("CONFIG:Release", "_hardening_fortify_cfg", "_hardening_speed_cfg")
+            ):
                 continue
             return False
         if marker == "CONFIG:MinSizeRel":
@@ -1199,6 +1281,7 @@ def _line_satisfies_genex_gate(line: str, gate_requires: list[str]) -> bool:
                 "CONFIG:RelWithDebInfo" in line
                 or "_hardening_relwithdebinfo_cfg" in line
                 or "_hardening_fortify_cfg" in line
+                or "_hardening_speed_cfg" in line
             ):
                 continue
             return False
@@ -1207,17 +1290,20 @@ def _line_satisfies_genex_gate(line: str, gate_requires: list[str]) -> bool:
                 continue
             return False
         if marker == "NOT_INSTRUMENTED_SANITIZER":
-            if (
-                "HAVE_INSTRUMENTED_SANITIZER" in line
-                and ("$<NOT:" in line or "NOT:$<BOOL" in line)
-            ):
+            if "HAVE_INSTRUMENTED_SANITIZER" in line and ("$<NOT:" in line or "NOT:$<BOOL" in line):
                 continue
             return False
         if marker == "NOT_FHARDENED":
-            if (
-                ("HAVE_C_FHARDENED" in line or "HAVE_CXX_FHARDENED" in line)
-                and ("$<NOT:" in line or "NOT:$<BOOL" in line)
-            ):
+            # C tokens follow the C -fhardened probe; CXX tokens and the C++
+            # library defs (-fhardened implies them) follow the CXX probe.
+            # COMPILE_LANGUAGE:CXX contains the C spelling, so test CXX first.
+            if "COMPILE_LANGUAGE:CXX" in line:
+                probe = "HAVE_CXX_FHARDENED"
+            elif "COMPILE_LANGUAGE:C" in line:
+                probe = "HAVE_C_FHARDENED"
+            else:
+                probe = "HAVE_CXX_FHARDENED"
+            if probe in line and ("$<NOT:" in line or "NOT:$<BOOL" in line):
                 continue
             return False
         if marker in line:
@@ -1245,14 +1331,20 @@ def verify_genex_gating(
     if not hardening_path.is_file():
         return issues
 
-    text = _strip_cmake_comments(
-        hardening_path.read_text(encoding="utf-8", errors="replace")
-    )
+    from policy_overrides import openssf_cross_opt_in
+
+    text = _strip_cmake_comments(hardening_path.read_text(encoding="utf-8", errors="replace"))
     rel_path = hardening_path.relative_to(repo_root)
+    # Consumer ``cross`` opt-in lifts the native term for host-only -z / -pie flags; the
+    # generated genex then legitimately lacks CMAKE_CROSSCOMPILING for those flags.
+    cross_allowed, _ = normalize_cross_opt_in(openssf_cross_opt_in(repo_root))
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for language in ("C", "CXX"):
         _, _, genex_gated, definitions_genex_gated = _resolve_flag_requirements(manifest, language)
-        for flag, gate_requires in genex_gated:
+        for flag, raw_gate_requires in genex_gated:
+            gate_requires = _effective_gate_markers(
+                flag, raw_gate_requires, cross_opt_in=cross_allowed
+            )
             key = (flag, tuple(gate_requires))
             if key in seen:
                 continue
@@ -1260,7 +1352,9 @@ def verify_genex_gating(
             lines = _lines_with_flag(text, flag)
             if not lines:
                 continue
-            if not any(_line_satisfies_genex_gate(line, gate_requires) for line in lines):
+            # Every occurrence must carry the gate: a correctly gated genex line does
+            # not excuse a second, bare copy of the same flag.
+            if not all(_line_satisfies_genex_gate(line, gate_requires) for line in lines):
                 issues.append(
                     f"{rel_path}: {flag} must use upstream CMake generator gating "
                     f"({', '.join(gate_requires)})"
@@ -1286,20 +1380,25 @@ def verify_genex_gating(
 def verify_hardening_uniformity(
     repo_root: Path,
     manifest: dict[str, Any],
-    config: dict[str, object],
+    config: dict[str, Any],
 ) -> list[str]:
     """Ensure hardening flags live on the interface target, not duplicated in CMake roots."""
     issues: list[str] = []
     hardening_path = repo_root / _consumer_cmake_dir(manifest) / "Hardening.cmake"
     hardening_text = (
-        hardening_path.read_text(encoding="utf-8", errors="replace") if hardening_path.is_file() else ""
+        hardening_path.read_text(encoding="utf-8", errors="replace")
+        if hardening_path.is_file()
+        else ""
     )
 
-    if hardening_text and not FORTIFY_RELEASE_CONFIG_GATE_RE.search(hardening_text):
-        if "-D_FORTIFY_SOURCE=3" in hardening_text or "_FORTIFY_SOURCE=3" in hardening_text:
-            issues.append(
-                "cmake/Hardening.cmake must gate _FORTIFY_SOURCE=3 on Release/RelWithDebInfo/MinSizeRel"
-            )
+    if (
+        hardening_text
+        and not FORTIFY_RELEASE_CONFIG_GATE_RE.search(hardening_text)
+        and "_FORTIFY_SOURCE=3" in hardening_text
+    ):
+        issues.append(
+            "cmake/Hardening.cmake must gate _FORTIFY_SOURCE=3 on Release/RelWithDebInfo/MinSizeRel"
+        )
 
     if hardening_text and re.search(r"-Wno-", hardening_text):
         issues.append(
@@ -1314,9 +1413,14 @@ def verify_hardening_uniformity(
         text = path.read_text(encoding="utf-8", errors="replace")
 
         if _has_blanket_werror(text):
-            issues.append(f"{path}: blanket -Werror must be on cmake/Hardening.cmake, not CMakeLists")
+            issues.append(
+                f"{path}: blanket -Werror must be on cmake/Hardening.cmake, not CMakeLists"
+            )
         if BUILD_OPT_RE.search(text):
-            issues.append(f"{path}: -O1/-O2/-O3/-Os optimization flags must be on cmake/Hardening.cmake, not CMakeLists")
+            issues.append(
+                f"{path}: -O1/-O2/-O3/-Os optimization flags must be on cmake/Hardening.cmake, not "
+                "CMakeLists"
+            )
         if FHARDENED_RE.search(text):
             issues.append(f"{path}: -fhardened must be on cmake/Hardening.cmake, not CMakeLists")
         if FEXCEPTIONS_RE.search(text):
@@ -1325,7 +1429,7 @@ def verify_hardening_uniformity(
     return issues
 
 
-def verify_cmake_roots(repo_root: Path, config: dict[str, object]) -> list[str]:
+def verify_cmake_roots(repo_root: Path, config: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     if not config["cmake_roots"]:
         issues.append(
@@ -1410,7 +1514,8 @@ def verify_system_include_policy(
             if re.search(r"\bSYSTEM\b", block, re.IGNORECASE):
                 continue
             issues.append(
-                f"{rel}: third-party include must use SYSTEM (OpenSSF -isystem guidance): {block[:80]!r}..."
+                f"{rel}: third-party include must use SYSTEM (OpenSSF -isystem guidance): "
+                f"{block[:80]!r}..."
             )
     return issues
 
@@ -1447,7 +1552,7 @@ def _required_flag_names(manifest: dict[str, Any]) -> set[str]:
 
 # Mutually exclusive OpenSSF alternatives: prefer the first token whose probe is true.
 _EXCLUSIVE_PROBE_FLAG_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("-fzero-init-padding-bits=all", "-fzero-init-padding-bits=union"),
+    ("-fzero-init-padding-bits=all", "-fzero-init-padding-bits=unions"),
 )
 
 
@@ -1475,7 +1580,7 @@ def _select_exclusive_probe_flag(
     return None
 
 
-def _collect_required_native_probes(manifest: dict[str, Any], config: dict[str, object]) -> set[str]:
+def _collect_required_native_probes(manifest: dict[str, Any], config: dict[str, Any]) -> set[str]:
     """Probe vars for required_flags only; auto-discovered from flag_sets.
 
     Exclusive alternatives (e.g. zero-init padding all vs union) are handled in
@@ -1500,7 +1605,7 @@ def _collect_required_native_probes(manifest: dict[str, Any], config: dict[str, 
 
 def _exclusive_group_probe_issues(
     manifest: dict[str, Any],
-    config: dict[str, object],
+    config: dict[str, Any],
     cache: dict[str, bool],
     *,
     source_dir: Path,
@@ -1540,11 +1645,7 @@ def _host_inapplicable_probes(manifest: dict[str, Any], probes: set[str]) -> set
     if machine not in ("aarch64", "arm64") and "HAVE_ARM_BRANCH_PROTECTION_STANDARD" in probes:
         inapplicable.add("HAVE_ARM_BRANCH_PROTECTION_STANDARD")
     if platform.system() != "Linux":
-        inapplicable.update(
-            probe
-            for probe in probes
-            if probe.startswith("HAVE_LINK_")
-        )
+        inapplicable.update(probe for probe in probes if probe.startswith("HAVE_LINK_"))
     return inapplicable
 
 
@@ -1563,7 +1664,7 @@ def _parse_cmake_cache_bools(cache_path: Path) -> dict[str, bool]:
     return values
 
 
-def _select_probe_configure_source(repo_root: Path, config: dict[str, object]) -> Path | None:
+def _select_probe_configure_source(repo_root: Path, config: dict[str, Any]) -> Path | None:
     candidates: list[tuple[int, Path]] = []
     for root in config.get("cmake_roots", []):
         cmake_lists = repo_root / str(root["file"])
@@ -1587,7 +1688,7 @@ def _select_probe_configure_source(repo_root: Path, config: dict[str, object]) -
 def verify_native_toolchain_probes(
     repo_root: Path,
     manifest: dict[str, Any],
-    config: dict[str, object],
+    config: dict[str, Any],
 ) -> list[str]:
     """Fail when CI host toolchain cannot satisfy manifest probe-gated OpenSSF flags."""
     if not shutil.which("cmake"):
@@ -1634,7 +1735,8 @@ def verify_native_toolchain_probes(
         if cache.get(probe):
             continue
         issues.append(
-            f"native toolchain probe {probe}=0 on CI host; dial-remove the flag or fix the toolchain "
+            f"native toolchain probe {probe}=0 on CI host; dial-remove the flag or fix the "
+            "toolchain "
             f"({source_dir})"
         )
     issues.extend(_exclusive_group_probe_issues(manifest, config, cache, source_dir=source_dir))
@@ -1700,9 +1802,7 @@ def compile_db_cross_probe_caches(
     out: dict[str, dict[str, bool]] = {}
     for entry in compile_db_firmware_entries(repo_root):
         rel = Path(str(entry["compile_commands_json"])).as_posix()
-        out[rel] = compile_db_cross_probe_cache_for_db(
-            repo_root, rel, manifest=manifest
-        )
+        out[rel] = compile_db_cross_probe_cache_for_db(repo_root, rel, manifest=manifest)
     return out
 
 
@@ -1718,7 +1818,6 @@ def compile_db_cross_probe_cache(
     if manifest is None:
         return merged
     return _usable_openssf_probe_cache(merged, manifest)
-
 
 
 def _compile_language_for_source(source: Path) -> str:
@@ -1761,16 +1860,267 @@ def _compile_db_gate_applies(
         return False
     if "NOT_FHARDENED" in markers:
         probe = f"HAVE_{language}_FHARDENED"
-        if probe_cache.get(probe, False):
+        # Mirrors the generated gate: -fhardened is not emitted under a sanitizer.
+        if probe_cache.get(probe, False) and "-fsanitize" not in command:
             return False
     return True
 
 
-def _definition_present_in_command(definition: str, command: str) -> bool:
-    if f"-D{definition}" in command:
-        return True
-    # Bare token match for already-expanded forms.
-    return definition in command
+# A required option only counts when the command line leaves it in effect. GCC
+# and Clang apply the last of conflicting options, so a later
+# -fno-stack-protector, -U_FORTIFY_SOURCE, -O0 or -Wno-error cancels an earlier
+# hardening flag, and options are matched as whole tokens (-Werror=vla is not
+# -Werror, -no-pie is not -pie).
+OPTION_MISSING = "missing"
+# Later options that keep at least the required protection.
+_STRONGER_OPTIONS: dict[str, frozenset[str]] = {
+    "-O2": frozenset({"-O3"}),
+    "-fstack-protector-strong": frozenset({"-fstack-protector-all"}),
+    "-fcf-protection=full": frozenset({"-fcf-protection"}),
+    "-fzero-call-used-regs=used-gpr": frozenset(
+        {
+            "-fzero-call-used-regs=all-gpr",
+            "-fzero-call-used-regs=used",
+            "-fzero-call-used-regs=all",
+        }
+    ),
+}
+# Preparatory options: required to appear, not to win (-D_FORTIFY_SOURCE=3 follows).
+_PRESENCE_ONLY_OPTIONS = frozenset({"-U_FORTIFY_SOURCE"})
+# -Wno-<parent> also silences these (-Wformat-security needs -Wformat).
+_WARNING_PARENTS = {"format-security": "format", "format-signedness": "format"}
+# Warnings a group option is made of (-Werror=implicit covers both).
+_WARNING_CHILDREN = {"implicit": ("implicit-int", "implicit-function-declaration")}
+_OPTIMIZATION_RE = re.compile(r"-O(?:[0-9]+|s|z|g|fast)?")
+_LINKER_PREFIX = "LINKER:"
+
+
+def split_command(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def compile_entry_tokens(entry: dict[str, Any]) -> list[str]:
+    """Compiler arguments in order, -Wp, lists expanded and -D NAME / -U NAME joined."""
+    args = entry.get("arguments")
+    if isinstance(args, list) and args:
+        raw = [str(arg) for arg in args]
+    else:
+        raw = split_command(entry_command(entry))
+    expanded: list[str] = []
+    for token in raw:
+        if token.startswith("-Wp,"):
+            expanded.extend(part for part in token[len("-Wp,") :].split(",") if part)
+        else:
+            expanded.append(token)
+    tokens: list[str] = []
+    index = 0
+    while index < len(expanded):
+        token = expanded[index]
+        if token in ("-D", "-U") and index + 1 < len(expanded):
+            tokens.append(token + expanded[index + 1])
+            index += 2
+            continue
+        tokens.append(token)
+        index += 1
+    return tokens
+
+
+def _compile_option_family(token: str) -> str | None:
+    """Key shared by options that override one another, or None for other tokens."""
+    if _OPTIMIZATION_RE.fullmatch(token):
+        return "-O"
+    if token.startswith(("-D", "-U")) and len(token) > len("-D"):
+        return "-D" + token[len("-D") :].split("=", 1)[0]
+    for prefix in ("-f", "-m"):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            name = token[len(prefix) :].split("=", 1)[0].removeprefix("no-")
+            if name.startswith("stack-protector"):
+                name = "stack-protector"
+            return prefix + name
+    return None
+
+
+def _last_warning_option(name: str, tokens: list[str]) -> str | None:
+    last = None
+    for token in tokens:
+        if token in (f"-W{name}", f"-Wno-{name}", f"-Werror={name}") or token.startswith(
+            f"-W{name}="
+        ):
+            last = token
+    return last
+
+
+def _warning_switched_off(token: str | None, name: str) -> bool:
+    return token in (f"-Wno-{name}", f"-W{name}=0", f"-W{name}=none")
+
+
+def _last_warning_error_option(name: str, tokens: list[str]) -> str | None:
+    last = None
+    for token in tokens:
+        if token in (f"-Werror={name}", f"-Wno-error={name}"):
+            last = token
+    return last
+
+
+def _warning_related_override(name: str, tokens: list[str], *, as_error: bool) -> str | None:
+    """A later option that silences ``name`` through a child or parent warning."""
+    for child in _WARNING_CHILDREN.get(name, ()):
+        last = _last_warning_option(child, tokens)
+        if _warning_switched_off(last, child):
+            return last
+        if as_error and _last_warning_error_option(child, tokens) == f"-Wno-error={child}":
+            return f"-Wno-error={child}"
+    parent = _WARNING_PARENTS.get(name)
+    if parent is not None:
+        last = _last_warning_option(parent, tokens)
+        if _warning_switched_off(last, parent):
+            return last
+    return None
+
+
+def _warning_not_in_effect(flag: str, tokens: list[str]) -> str | None:
+    if "-w" in tokens:
+        return "-w"
+    if flag == "-Werror":
+        last = None
+        for token in tokens:
+            if token in ("-Werror", "-Wno-error"):
+                last = token
+        if last is None:
+            return OPTION_MISSING
+        return None if last == "-Werror" else last
+    if flag.startswith("-Werror="):
+        name = flag[len("-Werror=") :]
+        last_error = _last_warning_error_option(name, tokens)
+        if last_error is None:
+            return OPTION_MISSING
+        if last_error != flag:
+            return last_error
+        last = _last_warning_option(name, tokens)
+        if _warning_switched_off(last, name):
+            return last
+        return _warning_related_override(name, tokens, as_error=True)
+    name, _, value = flag[len("-W") :].partition("=")
+    last = _last_warning_option(name, tokens)
+    if last is None:
+        return OPTION_MISSING
+    in_effect = last == flag if value else not _warning_switched_off(last, name)
+    if not in_effect:
+        return last
+    return _warning_related_override(name, tokens, as_error=False)
+
+
+def compile_option_not_in_effect(flag: str, tokens: list[str]) -> str | None:
+    """None when ``flag`` is in effect; else ``OPTION_MISSING`` or the option that wins over it."""
+    if flag in _PRESENCE_ONLY_OPTIONS:
+        return None if flag in tokens else OPTION_MISSING
+    if flag.startswith("-W"):
+        return _warning_not_in_effect(flag, tokens)
+    family = _compile_option_family(flag)
+    if family is None:
+        return None if flag in tokens else OPTION_MISSING
+    accepted = {flag} | _STRONGER_OPTIONS.get(flag, frozenset())
+    if family.startswith("-D") and "=" not in flag:
+        accepted.add(f"{flag}=1")
+    last = None
+    for token in tokens:
+        if _compile_option_family(token) == family:
+            last = token
+    if last is None:
+        return OPTION_MISSING
+    return None if last in accepted else last
+
+
+def linker_items(tokens: list[str]) -> list[str]:
+    """Driver options as-is; -Wl, / -Xlinker options as ``LINKER:<arg>`` with -z pairs joined."""
+    items: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.startswith("-Wl,"):
+            items.extend(_LINKER_PREFIX + arg for arg in token[len("-Wl,") :].split(",") if arg)
+        elif token == "-Xlinker" and index + 1 < len(tokens):
+            index += 1
+            items.append(_LINKER_PREFIX + tokens[index])
+        else:
+            items.append(token)
+        index += 1
+    joined: list[str] = []
+    z_option = f"{_LINKER_PREFIX}-z"
+    for item in items:
+        if joined and joined[-1] == z_option and item.startswith(_LINKER_PREFIX):
+            joined[-1] = f"{z_option},{item[len(_LINKER_PREFIX) :]}"
+        elif item.startswith(z_option) and len(item) > len(z_option) and item[len(z_option)] != ",":
+            joined.append(f"{z_option},{item[len(z_option) :]}")
+        else:
+            joined.append(item)
+    return joined
+
+
+def _linker_toggle(on: Iterable[str], off: Iterable[str]) -> tuple[frozenset[str], frozenset[str]]:
+    return frozenset(on), frozenset(off)
+
+
+_LINK_OPTION_TOGGLES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "LINKER:-z,relro": _linker_toggle(["LINKER:-z,relro"], ["LINKER:-z,norelro"]),
+    "LINKER:-z,now": _linker_toggle(["LINKER:-z,now"], ["LINKER:-z,lazy"]),
+    "LINKER:-z,noexecstack": _linker_toggle(["LINKER:-z,noexecstack"], ["LINKER:-z,execstack"]),
+    "LINKER:-z,pack-relative-relocs": _linker_toggle(
+        ["LINKER:-z,pack-relative-relocs"], ["LINKER:-z,nopack-relative-relocs"]
+    ),
+    "LINKER:--as-needed": _linker_toggle(["LINKER:--as-needed"], ["LINKER:--no-as-needed"]),
+    "LINKER:--no-copy-dt-needed-entries": _linker_toggle(
+        ["LINKER:--no-copy-dt-needed-entries", "LINKER:--no-add-needed"],
+        ["LINKER:--copy-dt-needed-entries", "LINKER:--add-needed"],
+    ),
+    "LINKER:--gc-sections": _linker_toggle(["LINKER:--gc-sections"], ["LINKER:--no-gc-sections"]),
+    "-pie": _linker_toggle(
+        ["-pie", "-static-pie", "LINKER:-pie", "LINKER:--pie", "LINKER:--pic-executable"],
+        ["-no-pie", "-static", "LINKER:-no-pie", "LINKER:--no-pie"],
+    ),
+}
+# ld applies these to the libraries that follow; --push-state / --pop-state
+# save and restore them around a library that needs the opposite setting.
+_POSITIONAL_LINK_OPTIONS = frozenset({"LINKER:--as-needed", "LINKER:--no-copy-dt-needed-entries"})
+
+
+def link_option_not_in_effect(token: str, items: list[str]) -> str | None:
+    """None when manifest link ``token`` is in effect in ``linker_items`` output."""
+    key = token
+    if token.startswith(_LINKER_PREFIX):
+        normalized = linker_items([f"-Wl,{token[len(_LINKER_PREFIX) :]}"])
+        if len(normalized) == 1:
+            key = normalized[0]
+    on, off = _LINK_OPTION_TOGGLES.get(key, (frozenset({key}), frozenset()))
+    positional = key in _POSITIONAL_LINK_OPTIONS
+    state: str | None = None
+    saved: list[str | None] = []
+    for item in items:
+        if positional and item == "LINKER:--push-state":
+            saved.append(state)
+        elif positional and item == "LINKER:--pop-state":
+            if saved:
+                state = saved.pop()
+        elif item in on or item in off:
+            state = item
+    if state is None:
+        return OPTION_MISSING
+    return None if state in on else state
+
+
+def describe_options_not_in_effect(failures: list[tuple[str, str]]) -> str:
+    """``missing A, B; overridden C by D`` for (option, reason) pairs."""
+    missing = [flag for flag, reason in failures if reason == OPTION_MISSING]
+    overridden = [f"{flag} by {reason}" for flag, reason in failures if reason != OPTION_MISSING]
+    parts = []
+    if missing:
+        parts.append(f"missing {', '.join(missing)}")
+    if overridden:
+        parts.append(f"overridden {', '.join(overridden)}")
+    return "; ".join(parts)
 
 
 def compile_db_audit_flags_for_context(
@@ -1790,9 +2140,7 @@ def compile_db_audit_flags_for_context(
     Link / TYPE-only tokens are omitted (link.txt + CMake regen).
     """
     covered_flags = _required_flag_names(manifest)
-    covered_defs = {
-        str(item) for item in _coverage_block(manifest).get("definitions", []) if item
-    }
+    covered_defs = {str(item) for item in _coverage_block(manifest).get("definitions", []) if item}
     try:
         required, probe_gated, genex_gated, definitions_genex_gated = _resolve_flag_requirements(
             manifest, language
@@ -1804,9 +2152,7 @@ def compile_db_audit_flags_for_context(
     probe_issues: list[str] = []
     seen: set[str] = set()
 
-    arch_flags = set(
-        _merge_compile_arch_blocks((_cmake_block(manifest).get("common", {}),))
-    )
+    arch_flags = set(_merge_compile_arch_blocks((_cmake_block(manifest).get("common", {}),)))
 
     def _add(token: str) -> None:
         if token in seen or token not in covered_flags:
@@ -1830,6 +2176,18 @@ def compile_db_audit_flags_for_context(
         if flag.startswith("LINKER:"):
             continue
         if not cross_compile and not _host_applicable_audit_flag(flag):
+            continue
+        if flag in _SANITIZER_INCOMPATIBLE_PROBE_FLAGS and (
+            _compile_db_gate_applies(
+                list(_SANITIZER_INCOMPATIBLE_PROBE_GATES),
+                cross_compile=cross_compile,
+                command=command,
+                build_type=build_type,
+                probe_cache=probe_cache,
+                language=language,
+            )
+            is not True
+        ):
             continue
         mates = _exclusive_probe_mates(flag)
         if mates:
@@ -1911,7 +2269,7 @@ def compile_db_audit_flags(manifest: dict[str, Any]) -> list[str]:
     flags, _ = compile_db_audit_flags_for_context(
         manifest,
         cross_compile=False,
-        probe_cache={probe: True for probe in _collect_manifest_probes(manifest)},
+        probe_cache=dict.fromkeys(_collect_manifest_probes(manifest), True),
         language="C",
         command="",
         build_type="Release",
@@ -1980,13 +2338,13 @@ def verify_compile_commands_openssf(
     except (FileNotFoundError, ValueError) as exc:
         return [str(exc)]
 
-    from policy_overrides import openssf_manifest_for_audit
-    from consumer_manifest import compile_db_firmware_entries
     from compile_db_util import (
         entry_compile_db_provenance,
         load_compile_entries_by_db,
         storage_key_prefers_firmware_compile,
     )
+    from consumer_manifest import compile_db_firmware_entries
+    from policy_overrides import openssf_manifest_for_audit
 
     repo_root = repo_root.resolve()
     manifest = openssf_manifest_for_audit(repo_root, kit_manifest, lookup_key=None)
@@ -1999,15 +2357,15 @@ def verify_compile_commands_openssf(
         for fw_entry in compile_db_firmware_entries(repo_root):
             db_rel = Path(str(fw_entry["compile_commands_json"])).as_posix()
             bucket = entries_by_db.setdefault(db_rel, {})
-            for lookup_key, entry in entries_by_key.items():
-                if not storage_key_prefers_firmware_compile(lookup_key, repo_root):
+            for db_key, db_entry in entries_by_key.items():
+                if not storage_key_prefers_firmware_compile(db_key, repo_root):
                     continue
-                provenance = entry_compile_db_provenance(entry)
-                if provenance:
-                    if db_rel in provenance:
-                        bucket[lookup_key] = entry
-                elif _source_key_in_compile_db(repo_root, db_rel, lookup_key):
-                    bucket[lookup_key] = entry
+                db_provenance = entry_compile_db_provenance(db_entry)
+                if db_provenance:
+                    if db_rel in db_provenance:
+                        bucket[db_key] = db_entry
+                elif _source_key_in_compile_db(repo_root, db_rel, db_key):
+                    bucket[db_key] = db_entry
     if entries_by_key is not None:
         by_key = entries_by_key
     else:
@@ -2084,9 +2442,7 @@ def verify_compile_commands_openssf(
             preferred_compile_db=preferred_compile_db,
             provenance=provenance or None,
         )
-        build_type = (
-            _build_type_from_cache(build_dir / "CMakeCache.txt") if build_dir else None
-        )
+        build_type = _build_type_from_cache(build_dir / "CMakeCache.txt") if build_dir else None
         cache = dict(probe_cache)
         if build_dir is not None:
             local_cache = build_dir / "CMakeCache.txt"
@@ -2109,18 +2465,18 @@ def verify_compile_commands_openssf(
         covered_defs = {
             str(item) for item in _coverage_block(tu_manifest).get("definitions", []) if item
         }
-        missing: list[str] = []
+        tokens = compile_entry_tokens(entry)
+        failures: list[tuple[str, str]] = []
         for flag in flags:
-            if flag in covered_defs:
-                if not _definition_present_in_command(flag, command):
-                    missing.append(flag)
-            elif flag not in command:
-                missing.append(flag)
-        if missing:
+            option = f"-D{flag}" if flag in covered_defs else flag
+            reason = compile_option_not_in_effect(option, tokens)
+            if reason is not None:
+                failures.append((flag, reason))
+        if failures:
             kind = "cross-compile" if cross else "host-native"
             issues.append(
                 f"compile_commands OpenSSF audit: {label_prefix}{rel} ({kind}) "
-                f"missing {', '.join(missing)}"
+                f"{describe_options_not_in_effect(failures)}"
             )
             return
         hardened_hosts.append((source.resolve(), command))
@@ -2130,7 +2486,7 @@ def verify_compile_commands_openssf(
         db_rel = Path(str(fw_entry["compile_commands_json"])).as_posix()
         db_entries = entries_by_db.get(db_rel, {})
         probe_cache = cross_probes_by_db.get(db_rel, {})
-        build_dir = (repo_root / db_rel).parent
+        build_dir: Path | None = (repo_root / db_rel).parent
         label = f"[{db_rel}] "
         for source in source_paths:
             if source.suffix.lower() not in _COMPILE_SUFFIXES:
@@ -2318,11 +2674,7 @@ def scan_repo(
 
     issues: list[str] = []
     issues.extend(verify_consumer_cmake_modules(repo_root, manifest))
-    issues.extend(
-        verify_hardening_include_wiring(
-            repo_root, kit_manifest, cmake_paths=cmake_paths
-        )
-    )
+    issues.extend(verify_hardening_include_wiring(repo_root, kit_manifest, cmake_paths=cmake_paths))
     issues.extend(verify_cmake_roots(repo_root, config))
     issues.extend(
         verify_cxx_hardening_adoption(
@@ -2337,9 +2689,7 @@ def scan_repo(
     issues.extend(verify_hardening_flags(repo_root, manifest, config))
     issues.extend(verify_hardening_uniformity(repo_root, manifest, config))
     issues.extend(
-        verify_consumer_hardening_no_unlisted_flags(
-            repo_root, manifest, kit_manifest=kit_manifest
-        )
+        verify_consumer_hardening_no_unlisted_flags(repo_root, manifest, kit_manifest=kit_manifest)
     )
     issues.extend(verify_system_include_policy(repo_root, cmake_paths=cmake_paths))
     issues.extend(verify_sanitizer_before_hardening(repo_root, cmake_paths=cmake_paths))
@@ -2348,13 +2698,33 @@ def scan_repo(
     return issues
 
 
-def _synthetic_genex_for_flag(flag: str, gate_requires: list[str]) -> str:
+def _effective_gate_markers(
+    flag: str,
+    gate_requires: list[str],
+    *,
+    cross_opt_in: frozenset[str] = frozenset(),
+) -> list[str]:
+    """``gate_requires`` with the native term lifted for a cross-opted-in host-only flag."""
+    if flag in cross_opt_in and flag in _HOST_ONLY_GENEX_FLAGS:
+        return [marker for marker in gate_requires if marker != "CMAKE_CROSSCOMPILING"]
+    return list(gate_requires)
+
+
+def _synthetic_genex_for_flag(
+    flag: str,
+    gate_requires: list[str],
+    *,
+    cross_opt_in: frozenset[str] = frozenset(),
+    language: str = "C",
+) -> str:
     conditions: list[str] = []
-    markers = set(gate_requires)
+    markers = set(_effective_gate_markers(flag, gate_requires, cross_opt_in=cross_opt_in))
     if "CMAKE_CROSSCOMPILING" in markers:
         conditions.append("$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>")
     fortify_cfgs = {"CONFIG:Release", "CONFIG:RelWithDebInfo", "CONFIG:MinSizeRel"}
-    if len(fortify_cfgs & markers) >= 2 or fortify_cfgs <= markers:
+    if (fortify_cfgs & markers) == set(GENEX_GATE_ALIASES["_hardening_speed_cfg"]):
+        conditions.append("${_hardening_speed_cfg}")
+    elif len(fortify_cfgs & markers) >= 2:
         conditions.append("${_hardening_fortify_cfg}")
     elif "CONFIG:RelWithDebInfo" in markers:
         conditions.append("${_hardening_relwithdebinfo_cfg}")
@@ -2367,7 +2737,16 @@ def _synthetic_genex_for_flag(flag: str, gate_requires: list[str]) -> str:
     if "NOT_INSTRUMENTED_SANITIZER" in markers:
         conditions.append("$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>")
     if "NOT_FHARDENED" in markers:
-        conditions.append("$<NOT:$<BOOL:${HAVE_C_FHARDENED}>>")
+        # Per-language: CXX -U/-D_FORTIFY_SOURCE and the C++ stdlib defs must
+        # follow HAVE_CXX_FHARDENED. -fhardened on that compiler already
+        # defines them, and the other language's probe is not a substitute.
+        lang = language if language in _VALID_FLAG_LANGUAGES else "C"
+        not_fhardened = f"$<NOT:$<BOOL:${{HAVE_{lang}_FHARDENED}}>>"
+        if "NOT_INSTRUMENTED_SANITIZER" not in markers:
+            # -fhardened is dropped under a sanitizer, so it supplies nothing
+            # there: an item that may still apply must not be gated off by the probe.
+            not_fhardened = f"$<OR:{not_fhardened},$<BOOL:${{HAVE_INSTRUMENTED_SANITIZER}}>>"
+        conditions.append(not_fhardened)
     if "TARGET_PROPERTY:TYPE" in markers and "EXECUTABLE" in markers:
         conditions.append("$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>")
     if "TARGET_PROPERTY:TYPE" in markers and "SHARED_LIBRARY" in markers:
@@ -2377,17 +2756,14 @@ def _synthetic_genex_for_flag(flag: str, gate_requires: list[str]) -> str:
         )
     if not conditions:
         return flag
-    if len(conditions) == 1:
-        condition = conditions[0]
-    else:
-        condition = "$<AND:" + ",".join(conditions) + ">"
+    condition = conditions[0] if len(conditions) == 1 else "$<AND:" + ",".join(conditions) + ">"
     return f"$<{condition}:{flag}>"
 
 
 _O2_PROBE_FLAGS = frozenset(
     {
         "-fzero-init-padding-bits=all",
-        "-fzero-init-padding-bits=union",
+        "-fzero-init-padding-bits=unions",
         "-fhardened",
         "-Whardened",
     }
@@ -2456,9 +2832,9 @@ def _ordered_language_coverage_flags(manifest: dict[str, Any], language: str) ->
     have no kit language metadata apply to both languages.
     """
     lang_flags = _language_compile_flag_names(manifest, language)
-    known_flags = _language_compile_flag_names(
-        manifest, "C"
-    ) | _language_compile_flag_names(manifest, "CXX")
+    known_flags = _language_compile_flag_names(manifest, "C") | _language_compile_flag_names(
+        manifest, "CXX"
+    )
     return [
         flag
         for flag in _coverage_flag_list(manifest)
@@ -2510,20 +2886,66 @@ def _dial_note_lines(dial_note: str | None, default_lines: list[str]) -> list[st
     return lines
 
 
+def _host_only_probe_genex(flag: str, probe: str, *, cross_opt_in: frozenset[str]) -> str:
+    """Gate for a host-only probe flag: linker probe AND sysroot libc probe AND native.
+
+    ``cross_opt_in`` drops the native term so cross builds also receive the flag;
+    the libc probe (run against the cross sysroot) remains the safety net.
+    """
+    conditions = [f"$<BOOL:${{{probe}}}>"]
+    libc_probe = _LIBC_PROBE_BY_FLAG.get(flag)
+    if libc_probe:
+        conditions.append(f"$<BOOL:${{{libc_probe}}}>")
+    if flag not in cross_opt_in:
+        conditions.append("$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>")
+    return f"$<$<AND:{','.join(conditions)}>:{flag}>"
+
+
+def _probe_gated_genex(
+    flag: str,
+    probe: str,
+    probe_gated: list[tuple[str, str]],
+    covered_flags: set[str],
+) -> str:
+    """Probe genex. A later exclusive alternative is emitted only when earlier ones are off."""
+    mates = _exclusive_probe_mates(flag)
+    gate = f"$<BOOL:${{{probe}}}>"
+    if mates and flag != mates[0]:
+        probe_by_flag = dict(probe_gated)
+        blocked = []
+        for earlier in mates:
+            if earlier == flag:
+                break
+            if earlier not in covered_flags:
+                continue
+            earlier_probe = probe_by_flag.get(earlier)
+            if earlier_probe:
+                blocked.append(f"$<NOT:$<BOOL:${{{earlier_probe}}}>>")
+        if blocked:
+            gate = "$<AND:" + ",".join([gate, *blocked]) + ">"
+    return f"$<{gate}:{flag}>"
+
+
 def generate_hardening_cmake(
     manifest: dict[str, Any],
     *,
     repo_root: Path,
     dial_note: str | None = None,
+    cross_opt_in: Iterable[str] | None = None,
 ) -> str:
     """Synthesize ``Hardening.cmake`` emitting only dialed ``coverage`` tokens.
 
     ``manifest`` must already have ``coverage.flags`` / ``definitions`` dialed (global
     and/or by_compile_db). Kit undialed manifest ⇒ FULL emit.
 
+    ``cross_opt_in`` lists host-only flags the consumer also wants on cross builds
+    (``policy.overrides.openssf-hardening.cross``); invalid tokens are ignored here
+    and reported by ``normalize_cross_opt_in`` at validation time.
+
     C compile options come from cmake.C (+ common); CXX from cmake.CXX (+ common).
     Preamble is the consumer ``license_header`` from ``repo_root``.
     """
+    cross_allowed, _ = normalize_cross_opt_in(cross_opt_in)
     covered_flags = _coverage_flag_set(manifest)
     covered_defs = _coverage_definition_set(manifest)
     arch_keyed = _compile_arch_keyed_flags(manifest)
@@ -2539,6 +2961,12 @@ def generate_hardening_cmake(
         _openssf_generated_preamble(repo_root, note_lines),
         "include(${CMAKE_CURRENT_LIST_DIR}/CompilerHardeningProbes.cmake)\n",
         "include(CMakeParseArguments)\n",
+        "# Blanket -Werror is for development builds. Source packages set\n",
+        "# -DHARDENING_WERROR=OFF so a newer compiler's new warnings do not\n",
+        "# fail a rebuild (OpenSSF: do not ship blanket -Werror).\n",
+        "if(NOT DEFINED HARDENING_WERROR)\n",
+        "  set(HARDENING_WERROR ON)\n",
+        "endif()\n",
         "function(define_hardening)\n",
         '  cmake_parse_arguments(HARDENING "" "TARGET;C_STANDARD;CXX_STANDARD" "" ${ARGN})\n',
         "  if(NOT HARDENING_TARGET)\n",
@@ -2549,13 +2977,22 @@ def generate_hardening_cmake(
         "  endif()\n",
         '  add_library("${HARDENING_TARGET}" INTERFACE)\n',
         "  set(_hardening_host $<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>)\n",
-        "  set(_hardening_fortify_cfg $<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>)\n",
+        "  set(_hardening_fortify_cfg "
+        "$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>)\n",
+        "  set(_hardening_speed_cfg $<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>)\n",
         "  set(_hardening_production_cfg $<OR:$<CONFIG:Release>,$<CONFIG:MinSizeRel>>)\n",
         "  set(_hardening_relwithdebinfo_cfg $<CONFIG:RelWithDebInfo>)\n",
         "  set(_hardening_debug_cfg $<CONFIG:Debug>)\n",
     ]
     compile_by_lang: dict[str, set[str]] = {"C": set(), "CXX": set()}
     link_flags: set[str] = set()
+    # Manifest definitions are per language (cmake.<LANG>.definitions_genex_gated) and
+    # are emitted under $<COMPILE_LANGUAGE:<LANG>>: the C++ standard-library defs
+    # (_GLIBCXX_*, _LIBCPP_HARDENING_MODE) must never reach a C translation unit. A
+    # C-only consumer never probes HAVE_CXX_FHARDENED, so an unwrapped
+    # $<NOT:$<BOOL:${HAVE_CXX_FHARDENED}>> gate is always true there and the bare -D
+    # lands next to C's -fhardened, which GCC rejects under -Whardened/-Werror.
+    definitions_by_lang: dict[str, set[str]] = {"C": set(), "CXX": set()}
     definitions: set[str] = set()
 
     for language in ("C", "CXX"):
@@ -2570,6 +3007,8 @@ def generate_hardening_cmake(
                 continue
             if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
                 link_flags.add(flag)
+            elif flag == "-Werror":
+                compile_by_lang[language].add("$<$<BOOL:${HARDENING_WERROR}>:-Werror>")
             else:
                 compile_by_lang[language].add(flag)
         for flag, probe in probe_gated:
@@ -2580,12 +3019,20 @@ def generate_hardening_cmake(
                 # instrumented sanitizer runtimes; its fortified libc inlines (e.g.
                 # poll() via <bits/poll2.h>) also bypass -Wl,--wrap test interception.
                 # Drop it (and the paired -Whardened) when a sanitizer is active.
+                # _FORTIFY_SOURCE also needs optimization: at -O0 GCC reports that
+                # -fhardened could not enable it (-Whardened, fatal under -Werror),
+                # so both ride the same optimized configs as _FORTIFY_SOURCE.
                 gated = (
                     f"$<$<AND:$<BOOL:${{{probe}}}>,"
-                    f"$<NOT:$<BOOL:${{HAVE_INSTRUMENTED_SANITIZER}}>>>:{flag}>"
+                    "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,"
+                    f"${{_hardening_fortify_cfg}}>:{flag}>"
                 )
+            elif flag in _HOST_ONLY_PROBE_FLAGS:
+                # Linker probe AND sysroot libc probe AND (native unless the consumer
+                # opted this flag in for cross via policy.overrides...cross).
+                gated = _host_only_probe_genex(flag, probe, cross_opt_in=cross_allowed)
             else:
-                gated = f"$<$<BOOL:${{{probe}}}>:{flag}>"
+                gated = _probe_gated_genex(flag, probe, probe_gated, covered_flags)
             if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
                 link_flags.add(gated)
             else:
@@ -2593,7 +3040,11 @@ def generate_hardening_cmake(
         for flag, gate_requires in genex_gated:
             if flag not in covered_flags:
                 continue
-            gated = _synthetic_genex_for_flag(flag, gate_requires)
+            # Host-only -z / -pie link flags drop their native term when the consumer
+            # opted them in for cross via policy.overrides...cross (TYPE term kept).
+            gated = _synthetic_genex_for_flag(
+                flag, gate_requires, cross_opt_in=cross_allowed, language=language
+            )
             if flag in ("-pie", "-shared") or flag.startswith("LINKER:"):
                 link_flags.add(gated)
             else:
@@ -2601,7 +3052,9 @@ def generate_hardening_cmake(
         for definition, gate_requires in definitions_genex_gated:
             if definition not in covered_defs:
                 continue
-            definitions.add(_synthetic_genex_for_flag(definition, gate_requires))
+            definitions_by_lang[language].add(
+                _synthetic_genex_for_flag(definition, gate_requires, language=language)
+            )
 
         for arch_key, flags in arch_keyed.items():
             for flag in flags:
@@ -2626,8 +3079,8 @@ def generate_hardening_cmake(
 
     known_definitions: set[str] = set()
     for language in ("C", "CXX"):
-        _required, _probe_gated, _genex_gated, language_definitions = (
-            _resolve_flag_requirements(manifest, language)
+        _required, _probe_gated, _genex_gated, language_definitions = _resolve_flag_requirements(
+            manifest, language
         )
         known_definitions.update(
             definition for definition, _gate in language_definitions if definition
@@ -2635,8 +3088,7 @@ def generate_hardening_cmake(
     definitions.update(
         definition
         for definition in _coverage_definition_list(manifest)
-        if definition not in known_definitions
-        and definition not in _LIBCPP_HARDENING_MODE_DEFS
+        if definition not in known_definitions and definition not in _LIBCPP_HARDENING_MODE_DEFS
     )
 
     for language in ("C", "CXX"):
@@ -2644,7 +3096,10 @@ def generate_hardening_cmake(
         if not compile_flags:
             continue
         lines.append('  target_compile_options("${HARDENING_TARGET}" INTERFACE\n')
-        for flag in sorted(compile_flags):
+        # -U before -D: GCC applies them in argv order, so -D...-U would undefine.
+        for flag in sorted(
+            compile_flags, key=lambda f: (":-U" not in f and not f.startswith("-U"), f)
+        ):
             lines.append(f"    $<$<COMPILE_LANGUAGE:{language}>:{flag}>\n")
         lines.append("  )\n")
 
@@ -2657,8 +3112,11 @@ def generate_hardening_cmake(
                 lines.append(f'    "{flag}"\n')
         lines.append("  )\n")
 
-    if definitions:
+    if definitions or any(definitions_by_lang.values()):
         lines.append('  target_compile_definitions("${HARDENING_TARGET}" INTERFACE\n')
+        for language in ("C", "CXX"):
+            for definition in sorted(definitions_by_lang[language]):
+                lines.append(f"    $<$<COMPILE_LANGUAGE:{language}>:{definition}>\n")
         for definition in sorted(definitions):
             lines.append(f"    {definition}\n")
         lines.append("  )\n")
@@ -2722,7 +3180,8 @@ def generate_probes_cmake(manifest: dict[str, Any], *, repo_root: Path) -> str:
             repo_root,
             [
                 "Generated from config/openssf-hardening-manifest.yaml -- do not hand-edit.",
-                "Copy from .github/lint-c-cpp/cmake/; relax via policy.overrides.openssf-hardening.",
+                "Copy from .github/lint-c-cpp/cmake/; relax via "
+                "policy.overrides.openssf-hardening.",
             ],
         ),
         "include(CheckCCompilerFlag)\n",
@@ -2747,7 +3206,8 @@ def generate_probes_cmake(manifest: dict[str, Any], *, repo_root: Path) -> str:
         "if(NOT HAVE_INSTRUMENTED_SANITIZER)\n",
         "  get_directory_property(_hardening_dir_compile_options COMPILE_OPTIONS)\n",
         "  get_directory_property(_hardening_dir_link_options LINK_OPTIONS)\n",
-        '  if("${_hardening_dir_compile_options};${_hardening_dir_link_options}" MATCHES "-fsanitize")\n',
+        '  if("${_hardening_dir_compile_options};${_hardening_dir_link_options}" MATCHES '
+        '"-fsanitize")\n',
         "    set(HAVE_INSTRUMENTED_SANITIZER 1)\n",
         "  endif()\n",
         "endif()\n\n",
@@ -2771,20 +3231,163 @@ def generate_probes_cmake(manifest: dict[str, Any], *, repo_root: Path) -> str:
         ]
     )
 
-    lines.append("if(UNIX AND NOT APPLE)\n")
+    z_link_probes = [(flag, probe) for flag, probe in link_probes if _is_linker_z_flag(flag)]
+    lines.extend(
+        [
+            "# Link probes run through whichever language is enabled (C-only, C++-only, both).\n",
+            "if(CMAKE_C_COMPILER)\n",
+            "  set(_hardening_link_lang C)\n",
+            "elseif(CMAKE_CXX_COMPILER)\n",
+            "  set(_hardening_link_lang CXX)\n",
+            "else()\n",
+            '  set(_hardening_link_lang "")\n',
+            "endif()\n",
+        ]
+    )
+    if z_link_probes:
+        _append_linker_z_ignored_guard(lines)
+    lines.append("if(UNIX AND NOT APPLE AND _hardening_link_lang)\n")
     for flag, probe in link_probes:
-        lines.append(f'  check_linker_flag(C "{flag}" {probe})\n')
+        lines.append(f'  check_linker_flag(${{_hardening_link_lang}} "{flag}" {probe})\n')
+    for flag, probe in z_link_probes:
+        lines.append(f'  _hardening_linker_z_flag_not_ignored("{flag}" {probe})\n')
     if link_probes:
         lines.append("else()\n")
         for _, probe in link_probes:
             lines.append(f"  set({probe} 0)\n")
     lines.append("endif()\n\n")
 
+    libc_probes = _libc_probes_for_link_probes(link_probes)
+    if libc_probes:
+        _append_libc_probe_checks(lines, libc_probes)
+
     lines.append("mark_as_advanced(\n")
     for probe in all_probes:
         lines.append(f"  {probe}\n")
+    for probe in libc_probes:
+        lines.append(f"  {probe}\n")
     lines.append("  HAVE_INSTRUMENTED_SANITIZER)\n")
     return "".join(lines)
+
+
+def _is_linker_z_flag(flag: str) -> bool:
+    """``LINKER:-z,<keyword>`` link flags (GNU ld warns-and-ignores unknown keywords)."""
+    return flag.startswith("LINKER:-z,")
+
+
+def _append_check_source_includes(lines: list[str]) -> None:
+    """include(Check*SourceCompiles) once. CMake allows repeats; the file should not."""
+    if any(line.startswith("include(CheckCSourceCompiles)") for line in lines):
+        return
+    lines.extend(
+        [
+            "include(CheckCSourceCompiles)\n",
+            "include(CheckCXXSourceCompiles)\n",
+        ]
+    )
+
+
+def _append_linker_z_ignored_guard(lines: list[str]) -> None:
+    """Emit the helper that demotes a ``-z`` probe when GNU ld merely ignores the keyword.
+
+    ``check_linker_flag`` derives its ``warning: <flag> ignored`` FAIL_REGEX from the
+    literal ``LINKER:-z,<keyword>`` token, so ld's real diagnostic
+    (``-z <keyword> ignored``; e.g. ``-z pack-relative-relocs`` on a target without
+    DT_RELR support such as riscv64 / arm in binutils 2.44) never matches and the probe
+    passes. Unknown non-``-z`` options are hard errors, so only ``-z`` needs the guard.
+
+    Like ``check_linker_flag`` itself, the guard only reaches ld when try-compiles
+    build executables; under ``CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`` (common
+    in cross toolchain files) both pass without linking, so the consumer must probe
+    as ``EXECUTABLE`` around ``include(Hardening.cmake)``.
+    """
+    _append_check_source_includes(lines)
+    lines.extend(
+        [
+            "# GNU ld accepts unknown -z keywords with only a warning ('-z <keyword> ignored',\n",
+            "# e.g. -z pack-relative-relocs on a target whose ld lacks DT_RELR support), and\n",
+            "# check_linker_flag builds its 'ignored' FAIL_REGEX from the literal\n",
+            "# 'LINKER:-z,<keyword>' token, which never matches that diagnostic. Re-link each\n",
+            "# supported -z probe with the bare ld spelling in FAIL_REGEX and demote on a hit so\n",
+            "# the generated genex does not emit a flag the target linker silently drops.\n",
+            "# Link probes (check_linker_flag and this guard) only reach ld when try-compiles\n",
+            "# build executables: with CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY (common in\n",
+            "# cross toolchain files) they pass without linking, so probe as EXECUTABLE around\n",
+            "# include(Hardening.cmake).\n",
+            "include(CMakePushCheckState)\n",
+            "function(_hardening_linker_z_flag_not_ignored flag var)\n",
+            "  if(NOT ${var} OR NOT _hardening_link_lang)\n",
+            "    return()\n",
+            "  endif()\n",
+            '  string(REGEX REPLACE "^LINKER:" "" _hardening_z_bare "${flag}")\n',
+            '  string(REPLACE "," " " _hardening_z_bare "${_hardening_z_bare}")\n',
+            '  string(REGEX REPLACE "^-z " "" _hardening_z_keyword "${_hardening_z_bare}")\n',
+            r'  string(REGEX REPLACE "([][+.*?()^$|\\])" "\\\\\\1" _hardening_z_bare_re'
+            r' "${_hardening_z_bare}")'
+            "\n",
+            r'  string(REGEX REPLACE "([][+.*?()^$|\\])" "\\\\\\1" _hardening_z_keyword_re'
+            r' "${_hardening_z_keyword}")'
+            "\n",
+            "  cmake_push_check_state(RESET)\n",
+            '  set(CMAKE_REQUIRED_LINK_OPTIONS "${flag}")\n',
+            '  # GNU ld: "warning: -z X ignored"; lld: "warning: unknown -z value: X".\n',
+            '  set(_hardening_z_fail_regex "warning: [^\\n]*${_hardening_z_bare_re}'
+            '[^\\n]* ignored"\n',
+            '      "warning: unknown -z value: ${_hardening_z_keyword_re}")\n',
+            '  if(_hardening_link_lang STREQUAL "C")\n',
+            '    check_c_source_compiles("int main(void) { return 0; }" ${var}_NOT_IGNORED\n',
+            "      FAIL_REGEX ${_hardening_z_fail_regex})\n",
+            "  else()\n",
+            '    check_cxx_source_compiles("int main(void) { return 0; }" ${var}_NOT_IGNORED\n',
+            "      FAIL_REGEX ${_hardening_z_fail_regex})\n",
+            "  endif()\n",
+            "  cmake_pop_check_state()\n",
+            "  if(NOT ${var}_NOT_IGNORED)\n",
+            '    message(STATUS "Performing Test ${var} - Failed (linker ignores '
+            '${_hardening_z_bare})")\n',
+            '    set(${var} 0 CACHE INTERNAL "Test ${var}" FORCE)\n',
+            "  endif()\n",
+            "endfunction()\n\n",
+        ]
+    )
+
+
+def _libc_probes_for_link_probes(link_probes: list[tuple[str, str]]) -> list[str]:
+    """Sysroot libc probes needed by the dialed link flags, in stable order."""
+    probes: list[str] = []
+    for flag, _ in link_probes:
+        libc_probe = _LIBC_PROBE_BY_FLAG.get(flag)
+        if libc_probe and libc_probe not in probes:
+            probes.append(libc_probe)
+    return probes
+
+
+def _append_libc_probe_checks(lines: list[str], probes: list[str]) -> None:
+    """Emit sysroot libc capability probes (preprocessor checks, so valid under cross)."""
+    _append_check_source_includes(lines)
+    lines.extend(
+        [
+            "# Sysroot libc capability probes. The decision is made by the preprocessor\n",
+            "# against the active toolchain's libc headers (features.h), so they are valid\n",
+            "# for cross builds too; nothing is run. GNU ld emits the\n",
+            "# GLIBC_ABI_DT_RELR verneed for -z pack-relative-relocs even when libc.so\n",
+            "# predates glibc 2.36, so the linker probe alone would pass and the loader\n",
+            "# would then reject the binary; this probe closes that gap.\n",
+        ]
+    )
+    # Do not pre-set the result variable: check_*_source_compiles skips the probe
+    # when the variable is already defined, which would silently pin it to 0.
+    for probe in probes:
+        source = _LIBC_PROBE_SOURCES[probe]
+        lines.append(f"set(_hardening_libc_probe_source [=[\n{source}]=])\n")
+        lines.append("if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER)\n")
+        lines.append(f'  check_c_source_compiles("${{_hardening_libc_probe_source}}" {probe})\n')
+        lines.append("elseif(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER)\n")
+        lines.append(f'  check_cxx_source_compiles("${{_hardening_libc_probe_source}}" {probe})\n')
+        lines.append("else()\n")
+        lines.append(f"  set({probe} 0)\n")
+        lines.append("endif()\n")
+        lines.append("unset(_hardening_libc_probe_source)\n\n")
 
 
 def write_generated_hardening_cmake(
@@ -2793,10 +3396,21 @@ def write_generated_hardening_cmake(
     *,
     repo_root: Path,
     dial_note: str | None = None,
+    cross_opt_in: Iterable[str] | None = None,
 ) -> None:
+    from policy_overrides import openssf_cross_opt_in
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    if cross_opt_in is None:
+        consumer_manifest = repo_root / ".github" / "lint-c-cpp.yaml"
+        cross_opt_in = openssf_cross_opt_in(repo_root) if consumer_manifest.is_file() else ()
     path.write_text(
-        generate_hardening_cmake(manifest, repo_root=repo_root, dial_note=dial_note),
+        generate_hardening_cmake(
+            manifest,
+            repo_root=repo_root,
+            dial_note=dial_note,
+            cross_opt_in=cross_opt_in,
+        ),
         encoding="utf-8",
     )
 
@@ -2834,20 +3448,18 @@ def _expected_consumer_hardening_modules(
         apply_openssf_coverage_flag_overrides,
         compile_db_override_slug,
         global_override_dials,
+        openssf_cross_opt_in,
         openssf_manifest_for_audit,
         override_dials_for_compile_db,
     )
 
     expected: dict[str, str] = {}
+    cross_opt_in = openssf_cross_opt_in(repo_root)
     global_add, global_remove = global_override_dials(repo_root, "openssf-hardening")
-    if not global_add and not global_remove:
-        expected["Hardening.cmake"] = generate_hardening_cmake(
-            kit_manifest, repo_root=repo_root
-        )
+    if not global_add and not global_remove and not cross_opt_in:
+        expected["Hardening.cmake"] = generate_hardening_cmake(kit_manifest, repo_root=repo_root)
     else:
-        global_manifest = openssf_manifest_for_audit(
-            repo_root, kit_manifest, lookup_key=None
-        )
+        global_manifest = openssf_manifest_for_audit(repo_root, kit_manifest, lookup_key=None)
         expected["Hardening.cmake"] = generate_hardening_cmake(
             global_manifest,
             repo_root=repo_root,
@@ -2855,6 +3467,7 @@ def _expected_consumer_hardening_modules(
                 "Generated from kit openssf-hardening-manifest + global "
                 "policy.overrides.openssf-hardening -- do not hand-edit."
             ),
+            cross_opt_in=cross_opt_in,
         )
     expected["CompilerHardeningProbes.cmake"] = generate_probes_cmake(
         kit_manifest, repo_root=repo_root
@@ -2865,12 +3478,8 @@ def _expected_consumer_hardening_modules(
         if not isinstance(raw, str) or not raw.strip():
             continue
         compile_json = Path(raw.strip()).as_posix()
-        add, remove = override_dials_for_compile_db(
-            repo_root, "openssf-hardening", compile_json
-        )
-        dialed = apply_openssf_coverage_flag_overrides(
-            kit_manifest, add=add, remove=remove
-        )
+        add, remove = override_dials_for_compile_db(repo_root, "openssf-hardening", compile_json)
+        dialed = apply_openssf_coverage_flag_overrides(kit_manifest, add=add, remove=remove)
         name = f"Hardening.by-{compile_db_override_slug(compile_json)}.cmake"
         expected[name] = generate_hardening_cmake(
             dialed,
@@ -2879,6 +3488,7 @@ def _expected_consumer_hardening_modules(
                 f"Generated from kit openssf-hardening-manifest + dials for "
                 f"{compile_json} -- do not hand-edit."
             ),
+            cross_opt_in=cross_opt_in,
         )
         flags_name = f"Hardening.flags.by-{compile_db_override_slug(compile_json)}.mk"
         expected[flags_name] = generate_hardening_flags_mk(
@@ -2958,9 +3568,11 @@ def sync_kit_cmake_regen(
     for name, body in expected.items():
         consumer_path = consumer_dir / name
         expected_text = _normalize_generated_cmake(body)
-        if not consumer_path.is_file() or _normalize_generated_cmake(
-            consumer_path.read_text(encoding="utf-8")
-        ) != expected_text:
+        if (
+            not consumer_path.is_file()
+            or _normalize_generated_cmake(consumer_path.read_text(encoding="utf-8"))
+            != expected_text
+        ):
             consumer_path.write_text(expected_text, encoding="utf-8")
             rewritten.append(consumer_path.relative_to(repo_root).as_posix())
 
@@ -3035,9 +3647,7 @@ def verify_hardening_include_wiring(
     from consumer_manifest import compile_db_firmware_entries, compile_db_userspace_entries
     from policy_overrides import _by_compile_db_entries, compile_db_override_slug
 
-    if not compile_db_firmware_entries(repo_root) and not compile_db_userspace_entries(
-        repo_root
-    ):
+    if not compile_db_firmware_entries(repo_root) and not compile_db_userspace_entries(repo_root):
         return []
 
     issues: list[str] = []
@@ -3046,9 +3656,7 @@ def verify_hardening_include_wiring(
     for cmake_path in cmake_paths:
         if not cmake_path.is_file():
             continue
-        text = _strip_cmake_comments(
-            cmake_path.read_text(encoding="utf-8", errors="replace")
-        )
+        text = _strip_cmake_comments(cmake_path.read_text(encoding="utf-8", errors="replace"))
         included = _included_hardening_module_names(text)
         if not included and "define_hardening(" not in text:
             continue
@@ -3068,9 +3676,7 @@ def verify_hardening_include_wiring(
             )
             continue
         expected = _hardening_module_name_for_compile_json(repo_root, compile_json)
-        cmake_included_by_db.setdefault(Path(compile_json).as_posix(), set()).update(
-            included
-        )
+        cmake_included_by_db.setdefault(Path(compile_json).as_posix(), set()).update(included)
         if expected not in included:
             issues.append(
                 f"{rel}: must include cmake/{expected} for compile_db {compile_json} "
@@ -3079,9 +3685,7 @@ def verify_hardening_include_wiring(
             )
         # Using both plain + by-slug is ambiguous.
         if len(set(included)) > 1:
-            issues.append(
-                f"{rel}: include exactly one Hardening module (found {included!r})"
-            )
+            issues.append(f"{rel}: include exactly one Hardening module (found {included!r})")
 
     firmware_jsons = {
         Path(str(entry["compile_commands_json"])).as_posix()
@@ -3101,9 +3705,7 @@ def verify_hardening_include_wiring(
         # Also accept any cmake path that included by_cmake even if mapped to another key
         # (multi-firmware DB edge); scan all collected includes.
         if not cmake_wired:
-            cmake_wired = any(
-                by_cmake in names for names in cmake_included_by_db.values()
-            )
+            cmake_wired = any(by_cmake in names for names in cmake_included_by_db.values())
         make_wired = _make_includes_hardening_flags_mk(repo_root, by_mk)
         if not cmake_wired and not make_wired:
             issues.append(
@@ -3114,48 +3716,135 @@ def verify_hardening_include_wiring(
     return issues
 
 
-def _link_txt_needles(token: str) -> tuple[str, ...]:
-    if token.startswith("LINKER:"):
-        rest = token[len("LINKER:") :]
-        return (token, f"-Wl,{rest}", rest)
-    if token == "-pie":
-        return ("-pie", "-Wl,-pie")
-    if token == "-shared":
-        return ("-shared",)
-    return (token,)
+@dataclass(frozen=True)
+class LinkCommand:
+    label: str
+    items: list[str]
+    shared: bool
 
 
-def _link_txt_has_token(text: str, token: str) -> bool:
-    return any(needle in text for needle in _link_txt_needles(token))
+def _link_segments(tokens: list[str]) -> list[list[str]]:
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token == "&&":
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return segments
 
 
-def _userspace_link_texts(build_dir: Path) -> list[tuple[str, str]]:
-    """Return ``(label, text)`` link surfaces: Make ``link.txt`` and/or Ninja ``build.ninja``."""
-    found: list[tuple[str, str]] = []
-    for link_path in sorted(build_dir.glob("**/CMakeFiles/**/*.dir/link.txt")):
-        try:
-            found.append(
-                (
-                    link_path.relative_to(build_dir).as_posix(),
-                    link_path.read_text(encoding="utf-8", errors="replace"),
-                )
-            )
-        except OSError:
+def _makefile_link_commands(label: str, text: str) -> list[LinkCommand]:
+    """Driver link commands in one ``link.txt`` (``ar`` / ``ranlib`` steps write no ``-o``)."""
+    commands: list[LinkCommand] = []
+    for line in text.splitlines():
+        for segment in _link_segments(split_command(line)):
+            if "-o" in segment:
+                commands.append(LinkCommand(label, linker_items(segment), "-shared" in segment))
+    return commands
+
+
+_NINJA_VARIABLE_RE = re.compile(r"\$(\$|\{\w+\}|\w+)")
+_NINJA_LINK_RULE_RE = re.compile(r"_(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)_LINKER__")
+_NINJA_ARCHIVE_RULE_RE = re.compile(r"_STATIC_LIBRARY_LINKER__")
+
+
+def _ninja_lines(build_dir: Path, name: str, seen: set[Path]) -> list[str]:
+    """Logical lines of a Ninja file and the files it includes ($-newline joined)."""
+    path = (build_dir / name).resolve()
+    if path in seen or not path.is_file():
+        return []
+    seen.add(path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    lines: list[str] = []
+    for line in text.replace("$\n", "").splitlines():
+        if line.startswith(("include ", "subninja ")):
+            lines.extend(_ninja_lines(build_dir, line.split(None, 1)[1].strip(), seen))
+        else:
+            lines.append(line)
+    return lines
+
+
+def _ninja_link_commands(build_dir: Path) -> tuple[list[LinkCommand], list[str]]:
+    """One link command per CMake executable / shared / module link statement."""
+    lines = _ninja_lines(build_dir, "build.ninja", set())
+    rules: dict[str, str] = {}
+    statements: list[tuple[str, str, str, dict[str, str]]] = []
+    current: dict[str, str] | None = None
+    rule_name: str | None = None
+    for line in lines:
+        if line.startswith("rule "):
+            rule_name = line[len("rule ") :].strip()
+            current = None
+        elif line.startswith("build "):
+            rule_name = None
+            outputs, _, rest = line[len("build ") :].partition(":")
+            rule, _, inputs = rest.strip().partition(" ")
+            current = {}
+            statements.append((outputs.strip(), rule, inputs.split("|", 1)[0].strip(), current))
+        elif line.startswith((" ", "\t")) and "=" in line:
+            key, _, value = line.strip().partition("=")
+            if current is not None:
+                current[key.strip()] = value.strip()
+            elif rule_name is not None and key.strip() == "command":
+                rules[rule_name] = value.strip()
+        elif line.strip():
+            current = None
+            rule_name = None
+
+    commands: list[LinkCommand] = []
+    issues: list[str] = []
+    for outputs, rule, inputs, variables in statements:
+        if "_LINKER__" not in rule or _NINJA_ARCHIVE_RULE_RE.search(rule):
             continue
-    if found:
-        return found
-    ninja = build_dir / "build.ninja"
-    if ninja.is_file():
-        try:
-            found.append(
-                (
-                    "build.ninja",
-                    ninja.read_text(encoding="utf-8", errors="replace"),
-                )
+        kind = _NINJA_LINK_RULE_RE.search(rule)
+        label = f"build.ninja ({outputs})"
+        if kind is None or rule not in rules:
+            issues.append(f"OpenSSF link audit: {label}: unrecognized link rule {rule!r}")
+            continue
+        values = {**variables, "in": inputs, "out": outputs}
+
+        def substitute(match: re.Match[str], values: dict[str, str] = values) -> str:
+            name = match.group(1).strip("{}")
+            return "$" if name == "$" else values.get(name, "")
+
+        tokens = split_command(_NINJA_VARIABLE_RE.sub(substitute, rules[rule]))
+        target = variables.get("TARGET_FILE", outputs)
+        link = [
+            segment
+            for segment in _link_segments(tokens)
+            if any(
+                token == "-o" and index + 1 < len(segment) and segment[index + 1] == target
+                for index, token in enumerate(segment)
             )
-        except OSError:
-            pass
-    return found
+        ]
+        if not link:
+            issues.append(f"OpenSSF link audit: {label}: no link command writes {target}")
+            continue
+        shared = kind.group(1) != "EXECUTABLE"
+        commands.extend(LinkCommand(label, linker_items(segment), shared) for segment in link)
+    return commands, issues
+
+
+def _userspace_link_commands(build_dir: Path) -> tuple[list[LinkCommand], list[str]] | None:
+    """Link commands from Make ``link.txt`` files, else Ninja; None when neither exists."""
+    link_files = sorted(build_dir.glob("**/CMakeFiles/**/*.dir/link.txt"))
+    if link_files:
+        commands: list[LinkCommand] = []
+        for link_path in link_files:
+            with contextlib.suppress(OSError):
+                commands.extend(
+                    _makefile_link_commands(
+                        link_path.relative_to(build_dir).as_posix(),
+                        link_path.read_text(encoding="utf-8", errors="replace"),
+                    )
+                )
+        return commands, []
+    if (build_dir / "build.ninja").is_file():
+        return _ninja_link_commands(build_dir)
+    return None
 
 
 def verify_userspace_link_txt_openssf(
@@ -3179,9 +3868,7 @@ def verify_userspace_link_txt_openssf(
         add, remove = override_dials_for_compile_db(
             repo_root, "openssf-hardening", compile_json or None
         )
-        dialed = apply_openssf_coverage_flag_overrides_local(
-            kit_manifest, add=add, remove=remove
-        )
+        dialed = apply_openssf_coverage_flag_overrides_local(kit_manifest, add=add, remove=remove)
         covered = _required_flag_names(dialed)
         link_tokens = sorted(
             token
@@ -3198,28 +3885,30 @@ def verify_userspace_link_txt_openssf(
                 "(configure the declared userspace project before auditing)"
             )
             continue
-        link_texts = _userspace_link_texts(build_dir)
-        if not link_texts:
+        found = _userspace_link_commands(build_dir)
+        if found is None:
             issues.append(
                 f"OpenSSF link audit: configured userspace build "
                 f"{build_dir.relative_to(repo_root)} has no CMakeFiles/**/link.txt "
                 "or build.ninja (configure/build the userspace targets)"
             )
             continue
-        for label, text in link_texts:
-            shared = "-shared" in text
-            missing: list[str] = []
+        link_commands, parse_issues = found
+        issues.extend(parse_issues)
+        for command in link_commands:
+            failures: list[tuple[str, str]] = []
             for token in link_tokens:
-                if token == "-pie" and shared and label != "build.ninja":
+                if token == "-pie" and command.shared:
                     continue
-                if token == "-shared" and not shared:
+                if token == "-shared" and not command.shared:
                     continue
-                if not _link_txt_has_token(text, token):
-                    missing.append(token)
-            if missing:
-                rel = f"{build_dir.relative_to(repo_root).as_posix()}/{label}"
+                reason = link_option_not_in_effect(token, command.items)
+                if reason is not None:
+                    failures.append((token, reason))
+            if failures:
+                rel = f"{build_dir.relative_to(repo_root).as_posix()}/{command.label}"
                 issues.append(
-                    f"OpenSSF link audit: {rel} missing {', '.join(missing)}"
+                    f"OpenSSF link audit: {rel} {describe_options_not_in_effect(failures)}"
                 )
     return issues
 
@@ -3384,9 +4073,7 @@ target_link_libraries(core PUBLIC hardening)
             encoding="utf-8",
         )
         (kit / "cmake").mkdir(parents=True)
-        write_generated_hardening_cmake(
-            kit / "cmake" / "Hardening.cmake", manifest, repo_root=repo
-        )
+        write_generated_hardening_cmake(kit / "cmake" / "Hardening.cmake", manifest, repo_root=repo)
         write_generated_probes_cmake(
             kit / "cmake" / "CompilerHardeningProbes.cmake", manifest, repo_root=repo
         )
@@ -3401,13 +4088,19 @@ target_link_libraries(core PUBLIC hardening)
         (synthetic_build / "CMakeCache.txt").write_text(
             "CMAKE_BUILD_TYPE:STRING=Release\n", encoding="utf-8"
         )
-        synthetic_link_tokens = [
-            token
-            for token in _required_flag_names(manifest)
-            if token.startswith("LINKER:") or token == "-pie"
+        synthetic_link_flags = [
+            f"-Wl,{token[len(_LINKER_PREFIX) :]}" if token.startswith(_LINKER_PREFIX) else token
+            for token in sorted(_required_flag_names(manifest))
+            if token.startswith(_LINKER_PREFIX) or token == "-pie"
         ]
         (synthetic_build / "build.ninja").write_text(
-            "command = cc " + " ".join(synthetic_link_tokens) + "\n",
+            "rule C_EXECUTABLE_LINKER__app_Release\n"
+            "  command = $PRE_LINK && cc $FLAGS $LINK_FLAGS $in -o $TARGET_FILE && $POST_BUILD\n"
+            "build app: C_EXECUTABLE_LINKER__app_Release CMakeFiles/app.dir/app.c.o\n"
+            f"  LINK_FLAGS = {' '.join(synthetic_link_flags)}\n"
+            "  PRE_LINK = :\n"
+            "  POST_BUILD = :\n"
+            "  TARGET_FILE = app\n",
             encoding="utf-8",
         )
 
@@ -3431,21 +4124,38 @@ target_link_libraries(core PUBLIC hardening)
             print("self-test miss: expected unhardened OBJECT library rejection", file=sys.stderr)
             return 1
 
-        bad.write_text(good_cmake + '\nadd_link_options(-pie "LINKER:-z,relro")\n', encoding="utf-8")
-        if not any("raw -pie" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
+        bad.write_text(
+            good_cmake + '\nadd_link_options(-pie "LINKER:-z,relro")\n', encoding="utf-8"
+        )
+        if not any(
+            "raw -pie" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
             print("self-test miss: expected duplicate -pie detection", file=sys.stderr)
             return 1
 
-        legacy = bad.read_text(encoding="utf-8").replace("define_hardening", "define_host_hardening")
+        legacy = bad.read_text(encoding="utf-8").replace(
+            "define_hardening", "define_host_hardening"
+        )
         bad.write_text(legacy, encoding="utf-8")
-        if not any("define_host_hardening" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
-            print("self-test miss: expected legacy define_host_hardening rejection", file=sys.stderr)
+        if not any(
+            "define_host_hardening" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
+            print(
+                "self-test miss: expected legacy define_host_hardening rejection", file=sys.stderr
+            )
             return 1
 
         (repo / "userspace" / "CMakeLists.txt").write_text(good_cmake, encoding="utf-8")
-        stripped = (repo / "cmake" / "Hardening.cmake").read_text(encoding="utf-8").replace("-Wall", "")
+        stripped = (
+            (repo / "cmake" / "Hardening.cmake").read_text(encoding="utf-8").replace("-Wall", "")
+        )
         (repo / "cmake" / "Hardening.cmake").write_text(stripped, encoding="utf-8")
-        if not any("missing OpenSSF flag '-Wall'" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
+        if not any(
+            "missing OpenSSF flag '-Wall'" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
             print("self-test miss: expected missing template flag detection", file=sys.stderr)
             return 1
 
@@ -3456,7 +4166,10 @@ target_link_libraries(core PUBLIC hardening)
 
         bad_werror = good_cmake + "\nadd_compile_options(-Werror)\n"
         (repo / "userspace" / "CMakeLists.txt").write_text(bad_werror, encoding="utf-8")
-        if not any("blanket -Werror must be on cmake/Hardening.cmake" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
+        if not any(
+            "blanket -Werror must be on cmake/Hardening.cmake" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
             print("self-test miss: expected duplicate blanket -Werror detection", file=sys.stderr)
             return 1
 
@@ -3474,12 +4187,19 @@ target_link_libraries(${COMPONENT_LIB} PUBLIC hardening)
         (repo / "esp-idf" / "main" / "CMakeLists.txt").write_text(embedded_cmake, encoding="utf-8")
         source_paths, cmake_paths = paths_for()
         if scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths):
-            print("self-test miss: expected embedded + userspace roots to pass with probe-gated Hardening.cmake", file=sys.stderr)
+            print(
+                "self-test miss: expected embedded + userspace roots to pass with probe-gated "
+                "Hardening.cmake",
+                file=sys.stderr,
+            )
             return 1
 
         ungated = (repo / "cmake" / "Hardening.cmake").read_text(encoding="utf-8") + "\n  -fPIE\n"
         (repo / "cmake" / "Hardening.cmake").write_text(ungated, encoding="utf-8")
-        if not any("must use upstream CMake generator gating" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
+        if not any(
+            "must use upstream CMake generator gating" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
             print("self-test miss: expected ungated genex flag rejection", file=sys.stderr)
             return 1
 
@@ -3487,8 +4207,11 @@ target_link_libraries(${COMPONENT_LIB} PUBLIC hardening)
             repo / "cmake" / "Hardening.cmake", manifest, repo_root=repo
         )
         embedded_bad = repo / "esp-idf" / "main" / "CMakeLists.txt"
-        embedded_bad.write_text(embedded_cmake + '\nadd_compile_options(-fPIE)\n', encoding="utf-8")
-        if not any("raw -fPIE in CMakeLists" in issue for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)):
+        embedded_bad.write_text(embedded_cmake + "\nadd_compile_options(-fPIE)\n", encoding="utf-8")
+        if not any(
+            "raw -fPIE in CMakeLists" in issue
+            for issue in scan_repo(repo, kit, source_paths=source_paths, cmake_paths=cmake_paths)
+        ):
             print("self-test miss: expected raw -fPIE rejection in CMakeLists", file=sys.stderr)
             return 1
 

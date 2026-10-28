@@ -70,35 +70,87 @@ def prepare_self_test_repo(root: Path) -> None:
     pcsc_canonical = "sample_pcsc_connect.cpp"
     serial_canonical = "sample_serial.cpp"
     cases = {
-        "glob_ok.cpp": ('#include "sample_glob_raii.h"\nvoid f(){ sample::GlobResult gr; (void)gr.match("/dev/tty*"); }\n', set()),
-        "glob_bad.cpp": ("#include <glob.h>\nvoid f(){ glob_t g{}; (void)glob(\"/dev/tty*\",0,0,&g); globfree(&g); }\n", {"glob_bad.cpp"}),
-        "fopen_bad.c": ("void f(void){ FILE *fp=fopen(\"/tmp/x\",\"r\"); if(fp){fclose(fp);} }\n", {"fopen_bad.c"}),
-        "fopen_ok.cpp": ('#include "sample_file_raii.h"\nvoid f(){ sample::FileHandle fh; (void)fh.open("/tmp/x", "r"); }\n', set()),
-        "opendir_bad.c": ("void f(void){ DIR *d=opendir(\"/tmp\"); if(d){closedir(d);} }\n", {"opendir_bad.c"}),
-        "dlopen_bad.cpp": ("void f(){ void *h=dlopen(\"libm.so\",0); if(h){dlclose(h);} }\n", {"dlopen_bad.cpp"}),
-        "pcsc_bad.cpp": ("void f(){ SCARDCONTEXT ctx{}; (void)SCardEstablishContext(0,0,0,&ctx); (void)SCardReleaseContext(ctx); }\n", {"pcsc_bad.cpp"}),
-        "open_bad.cpp": ("#include <fcntl.h>\nvoid f(){ int fd=open(\"/dev/null\",O_RDONLY); close(fd); }\n", {"open_bad.cpp"}),
-        "comment_ok.c": ("/* glob(pattern, 0, NULL, &g) then globfree(&g) */ void f(void){}\n", set()),
-        "raw_glob_bad.c": ("void f(){ glob_t g{}; glob(\"/dev/tty*\",0,0,&g); }\n", {"raw_glob_bad.c"}),
-        "split_glob_bad.c": ("void f(){ glob_t g{}; glob\n(\"/dev/tty*\",0,0,&g); }\n", {"split_glob_bad.c"}),
+        "glob_ok.cpp": (
+            '#include "sample_glob_raii.h"\n'
+            'void f(){ sample::GlobResult gr; (void)gr.match("/dev/tty*"); }\n',
+            set(),
+        ),
+        "glob_bad.cpp": (
+            '#include <glob.h>\nvoid f(){ glob_t g{}; (void)glob("/dev/tty*",0,0,&g); '
+            "globfree(&g); }\n",
+            {"glob_bad.cpp"},
+        ),
+        "fopen_bad.c": (
+            'void f(void){ FILE *fp=fopen("/tmp/x","r"); if(fp){fclose(fp);} }\n',
+            {"fopen_bad.c"},
+        ),
+        "fopen_ok.cpp": (
+            '#include "sample_file_raii.h"\n'
+            'void f(){ sample::FileHandle fh; (void)fh.open("/tmp/x", "r"); }\n',
+            set(),
+        ),
+        "opendir_bad.c": (
+            'void f(void){ DIR *d=opendir("/tmp"); if(d){closedir(d);} }\n',
+            {"opendir_bad.c"},
+        ),
+        "dlopen_bad.cpp": (
+            'void f(){ void *h=dlopen("libm.so",0); if(h){dlclose(h);} }\n',
+            {"dlopen_bad.cpp"},
+        ),
+        "pcsc_bad.cpp": (
+            "void f(){ SCARDCONTEXT ctx{}; (void)SCardEstablishContext(0,0,0,&ctx); "
+            "(void)SCardReleaseContext(ctx); }\n",
+            {"pcsc_bad.cpp"},
+        ),
+        "open_bad.cpp": (
+            '#include <fcntl.h>\nvoid f(){ int fd=open("/dev/null",O_RDONLY); close(fd); }\n',
+            {"open_bad.cpp"},
+        ),
+        "comment_ok.c": (
+            "/* glob(pattern, 0, NULL, &g) then globfree(&g) */ void f(void){}\n",
+            set(),
+        ),
+        "raw_glob_bad.c": (
+            'void f(){ glob_t g{}; glob("/dev/tty*",0,0,&g); }\n',
+            {"raw_glob_bad.c"},
+        ),
+        "split_glob_bad.c": (
+            'void f(){ glob_t g{}; glob\n("/dev/tty*",0,0,&g); }\n',
+            {"split_glob_bad.c"},
+        ),
     }
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [userspace]\n"
         "policy:\n  resource_lifetime:\n    pairs:\n"
-        "      - label: glob/globfree\n        acquire: [\"\\\\bglob\\\\s*\\\\(\"]\n        release: [\"\\\\bglobfree\\\\s*\\\\(\"]\n"
-        "        canonical_files: [userspace/app/sample_glob_raii.h]\n        hint: GlobResult (sample_glob_raii.h)\n"
-        "      - label: fopen/fclose\n        acquire: [\"\\\\bfopen\\\\s*\\\\(\"]\n        release: [\"\\\\bfclose\\\\s*\\\\(\"]\n"
-        "        canonical_files: [userspace/app/sample_file_raii.h]\n        hint: FileHandle (sample_file_raii.h)\n"
-        "      - label: opendir/closedir\n        acquire: [\"\\\\bopendir\\\\s*\\\\(\"]\n        release: [\"\\\\bclosedir\\\\s*\\\\(\"]\n"
-        "        canonical_files: [userspace/app/sample_dir_raii.h]\n        hint: DirHandle (sample_dir_raii.h)\n"
-        "      - label: dlopen/dlclose\n        acquire: [\"\\\\bdlopen\\\\s*\\\\(\"]\n        release: [\"\\\\bdlclose\\\\s*\\\\(\"]\n"
-        "        canonical_files: [userspace/app/sample_dl_raii.h]\n        hint: DlHandle (sample_dl_raii.h)\n"
-        "      - label: open/close (fd)\n        acquire: [\"(?<![:\\\\w])open\\\\s*\\\\([^;)]*,\\\\s*O_[A-Z_]\"]\n        release: [\"\\\\bclose\\\\s*\\\\(\\\\s*[^)\\\\s]\"]\n"
-        "        canonical_files: [userspace/app/sample_serial.cpp]\n        hint: serial_open helpers (sample_serial.cpp)\n"
-        "      - label: SCardEstablishContext/SCardReleaseContext\n        acquire: [\"\\\\bSCardEstablishContext\\\\s*\\\\(\"]\n        release: [\"\\\\bSCardReleaseContext\\\\s*\\\\(\"]\n"
-        "        canonical_files: [userspace/app/sample_pcsc_connect.cpp]\n        hint: PcscCard (sample_pcsc_connect.cpp)\n"
+        '      - label: glob/globfree\n        acquire: ["\\\\bglob\\\\s*\\\\("]\n'
+        '        release: ["\\\\bglobfree\\\\s*\\\\("]\n'
+        "        canonical_files: [userspace/app/sample_glob_raii.h]\n"
+        "        hint: GlobResult (sample_glob_raii.h)\n"
+        '      - label: fopen/fclose\n        acquire: ["\\\\bfopen\\\\s*\\\\("]\n'
+        '        release: ["\\\\bfclose\\\\s*\\\\("]\n'
+        "        canonical_files: [userspace/app/sample_file_raii.h]\n"
+        "        hint: FileHandle (sample_file_raii.h)\n"
+        '      - label: opendir/closedir\n        acquire: ["\\\\bopendir\\\\s*\\\\("]\n'
+        '        release: ["\\\\bclosedir\\\\s*\\\\("]\n'
+        "        canonical_files: [userspace/app/sample_dir_raii.h]\n"
+        "        hint: DirHandle (sample_dir_raii.h)\n"
+        '      - label: dlopen/dlclose\n        acquire: ["\\\\bdlopen\\\\s*\\\\("]\n'
+        '        release: ["\\\\bdlclose\\\\s*\\\\("]\n'
+        "        canonical_files: [userspace/app/sample_dl_raii.h]\n"
+        "        hint: DlHandle (sample_dl_raii.h)\n"
+        "      - label: open/close (fd)\n"
+        '        acquire: ["(?<![:\\\\w])open\\\\s*\\\\([^;)]*,\\\\s*O_[A-Z_]"]\n'
+        '        release: ["\\\\bclose\\\\s*\\\\(\\\\s*[^)\\\\s]"]\n'
+        "        canonical_files: [userspace/app/sample_serial.cpp]\n"
+        "        hint: serial_open helpers (sample_serial.cpp)\n"
+        "      - label: SCardEstablishContext/SCardReleaseContext\n"
+        '        acquire: ["\\\\bSCardEstablishContext\\\\s*\\\\("]\n'
+        '        release: ["\\\\bSCardReleaseContext\\\\s*\\\\("]\n'
+        "        canonical_files: [userspace/app/sample_pcsc_connect.cpp]\n"
+        "        hint: PcscCard (sample_pcsc_connect.cpp)\n"
         "  unsafe_api:\n    wrapper_files:\n"
         f"      - userspace/app/{glob_canonical}\n      - userspace/app/{file_canonical}\n"
         f"      - userspace/app/{dir_canonical}\n      - userspace/app/{dl_canonical}\n"
@@ -107,12 +159,36 @@ def prepare_self_test_repo(root: Path) -> None:
     )
     app = root / "userspace" / "app"
     app.mkdir(parents=True)
-    (app / glob_canonical).write_text("class GlobResult{~GlobResult(){globfree(&g_);} int match(const char*p){return glob(p,0,0,&g_);} glob_t g_;};\n", encoding="utf-8")
-    (app / file_canonical).write_text("class FileHandle{~FileHandle(){if(fp_)fclose(fp_);} FILE*open(const char*p,const char*m){return fp_=fopen(p,m);} FILE*fp_;};\n", encoding="utf-8")
-    (app / dir_canonical).write_text("class DirHandle{~DirHandle(){if(dir_)closedir(dir_);} DIR*open(const char*p){return dir_=opendir(p);} DIR*dir_;};\n", encoding="utf-8")
-    (app / dl_canonical).write_text("class DlHandle{~DlHandle(){if(h_)dlclose(h_);} void*open(const char*p,int f){return h_=dlopen(p,f);} void*h_;};\n", encoding="utf-8")
-    (app / pcsc_canonical).write_text("void list_readers_impl(){ SCARDCONTEXT ctx{}; SCardEstablishContext(0,0,0,&ctx); SCardReleaseContext(ctx); }\n", encoding="utf-8")
-    (app / serial_canonical).write_text("int serial_open(const char*p){ int fd=open(p,O_RDONLY); if(fd<0)return fd; close(fd); return fd; }\n", encoding="utf-8")
+    (app / glob_canonical).write_text(
+        "class GlobResult{~GlobResult(){globfree(&g_);} int match(const char*p){return "
+        "glob(p,0,0,&g_);} glob_t g_;};\n",
+        encoding="utf-8",
+    )
+    (app / file_canonical).write_text(
+        "class FileHandle{~FileHandle(){if(fp_)fclose(fp_);} FILE*open(const char*p,const "
+        "char*m){return fp_=fopen(p,m);} FILE*fp_;};\n",
+        encoding="utf-8",
+    )
+    (app / dir_canonical).write_text(
+        "class DirHandle{~DirHandle(){if(dir_)closedir(dir_);} DIR*open(const char*p){return "
+        "dir_=opendir(p);} DIR*dir_;};\n",
+        encoding="utf-8",
+    )
+    (app / dl_canonical).write_text(
+        "class DlHandle{~DlHandle(){if(h_)dlclose(h_);} void*open(const char*p,int f){return "
+        "h_=dlopen(p,f);} void*h_;};\n",
+        encoding="utf-8",
+    )
+    (app / pcsc_canonical).write_text(
+        "void list_readers_impl(){ SCARDCONTEXT ctx{}; SCardEstablishContext(0,0,0,&ctx); "
+        "SCardReleaseContext(ctx); }\n",
+        encoding="utf-8",
+    )
+    (app / serial_canonical).write_text(
+        "int serial_open(const char*p){ int fd=open(p,O_RDONLY); if(fd<0)return fd; close(fd); "
+        "return fd; }\n",
+        encoding="utf-8",
+    )
     duplicate = app / "duplicate"
     duplicate.mkdir()
     (duplicate / glob_canonical).write_text(

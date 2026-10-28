@@ -34,7 +34,7 @@ import unittest
 from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
-
+from typing import ClassVar
 
 TESTS_DIR = Path(__file__).resolve().parent
 LINT_LIB = TESTS_DIR.parent
@@ -98,12 +98,10 @@ HELPER_SCRIPTS = tuple(
         }
     )
 )
-CORE_SELF_TEST_SCRIPTS = (
-    LINT_LIB / "core" / "tools" / "tool_versions_check.py",
+CORE_SELF_TEST_SCRIPTS = (LINT_LIB / "core" / "tools" / "tool_versions_check.py",)
+SHELL_LINTER_SCRIPTS = frozenset(script.name for script in TOOLCHAIN_DIR.glob("*.sh")) | frozenset(
+    script.name for script in COMMANDS_DIR.glob("*.sh")
 )
-SHELL_LINTER_SCRIPTS = frozenset(
-    script.name for script in TOOLCHAIN_DIR.glob("*.sh")
-) | frozenset(script.name for script in COMMANDS_DIR.glob("*.sh"))
 SIMULATED_PYTHON_HELPERS = frozenset(
     {
         "magic_literals.py",
@@ -246,15 +244,13 @@ yamllint:
       sort_by: key
 """
 
-from consumer_manifest import (
+from consumer_manifest import (  # noqa: E402
     KNOWN_LINT_JOBS_ORDERED,
     enabled_lint_jobs_yaml_block,
 )
 
 _ENABLED_LINT_JOBS_YAML = enabled_lint_jobs_yaml_block()
-_POLICY_TEST_MANIFEST = (
-    _POLICY_TEST_MANIFEST.rstrip() + "\n\n" + _ENABLED_LINT_JOBS_YAML
-)
+_POLICY_TEST_MANIFEST = _POLICY_TEST_MANIFEST.rstrip() + "\n\n" + _ENABLED_LINT_JOBS_YAML
 
 _NULL_OVERRIDES_YAML = (
     "  resource_lifetime: null\n"
@@ -271,8 +267,7 @@ _NULL_OVERRIDES_YAML = (
 )
 
 _NULL_TOP_LEVEL_YAML = (
-    _ENABLED_LINT_JOBS_YAML
-    + "firmware_build:\n  commands: [make firmware]\n"
+    _ENABLED_LINT_JOBS_YAML + "firmware_build:\n  commands: [make firmware]\n"
     "spec_traceability: null\n"
     "toolchain: null\n"
     "workflow: null\n"
@@ -287,29 +282,25 @@ def write_license_only_manifest(root: Path, *, license_blob: str | None = None) 
         "  #\n"
         "  # Copyright (C) 2026 Nero Duality, LLC.\n"
         "  #\n"
-        "  # Licensed under the Apache License, Version 2.0 (the \"License\");\n"
+        '  # Licensed under the Apache License, Version 2.0 (the "License");\n'
         "  # you may not use this file except in compliance with the License.\n"
         "  # You may obtain a copy of the License at\n"
         "  #\n"
         "  #     http://www.apache.org/licenses/LICENSE-2.0\n"
         "  #\n"
         "  # Unless required by applicable law or agreed to in writing, software\n"
-        "  # distributed under the License is distributed on an \"AS IS\" BASIS,\n"
+        '  # distributed under the License is distributed on an "AS IS" BASIS,\n'
         "  # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n"
         "  # See the License for the specific language governing permissions and\n"
         "  # limitations under the License.\n"
     )
     write(
         root / ".github/lint-c-cpp.yaml",
-        "license_header: |\n"
-        + blob
-        + "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "license_header: |\n" + blob + "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
         "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
         "  source_roots: [core]\n"
         "compile_db:\n  firmware: []\n  userspace: []\n"
-        "policy:\n  constants_headers: [limits.h]\n"
-        + _NULL_OVERRIDES_YAML
-        + _NULL_TOP_LEVEL_YAML,
+        "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML + _NULL_TOP_LEVEL_YAML,
     )
 
 
@@ -348,10 +339,10 @@ def ensure_license_headers(spdx: ModuleType, paths: list[Path], year: int) -> No
 
 def write_custom_lints_smoke_repo(root: Path, lint_kit: Path) -> None:
     from hardening_verify import (
+        _normalize_generated_cmake,
         generate_hardening_cmake,
         generate_probes_cmake,
         load_hardening_manifest,
-        _normalize_generated_cmake,
     )
 
     (root / "cmake").mkdir(parents=True)
@@ -361,9 +352,7 @@ def write_custom_lints_smoke_repo(root: Path, lint_kit: Path) -> None:
     write_canonical_lint_manifest(root)
     kit_manifest = load_hardening_manifest(lint_kit)
     (root / "cmake" / "Hardening.cmake").write_text(
-        _normalize_generated_cmake(
-            generate_hardening_cmake(kit_manifest, repo_root=root)
-        ),
+        _normalize_generated_cmake(generate_hardening_cmake(kit_manifest, repo_root=root)),
         encoding="utf-8",
     )
     (root / "cmake" / "CompilerHardeningProbes.cmake").write_text(
@@ -377,8 +366,7 @@ def write_custom_lints_smoke_repo(root: Path, lint_kit: Path) -> None:
     cmake_header = spdx.hash_header_text(year)
     write(
         root / "userspace/CMakeLists.txt",
-        cmake_header
-        + 'cmake_minimum_required(VERSION 3.20)\n'
+        cmake_header + "cmake_minimum_required(VERSION 3.20)\n"
         "project(sample C)\n"
         'include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Hardening.cmake")\n'
         "define_hardening(\n  TARGET hardening\n  C_STANDARD 23)\n"
@@ -395,7 +383,12 @@ def write_custom_lints_smoke_repo(root: Path, lint_kit: Path) -> None:
     )
     write(
         root / "include/sample/mem_util.h",
-        header + '#pragma once\n#include "sample_null.h"\nstatic inline void sample_copy_bytes(void *d, const void *s, size_t n) { (void)d; (void)s; (void)n; }\n',
+        header
+        + (
+            '#pragma once\n#include "sample_null.h"\n'
+            "static inline void sample_copy_bytes(void *d, const void *s, size_t n) { (void)d; "
+            "(void)s; (void)n; }\n"
+        ),
     )
     write(
         root / "include/sample/sample_file_raii.h",
@@ -577,8 +570,7 @@ def run_checked(
         env=env,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if result.returncode != 0:
         raise AssertionError(
@@ -629,8 +621,7 @@ class EmbeddedSelfTests(unittest.TestCase):
                     cwd=REPO_ROOT,
                     check=False,
                     text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                 )
                 self.assertEqual(
                     result.returncode,
@@ -679,8 +670,7 @@ class LintStepCoverage(unittest.TestCase):
             cwd=REPO_ROOT,
             check=False,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         self.assertEqual(bad_result.returncode, 2)
         self.assertIn("unknown argument", bad_result.stderr)
@@ -757,7 +747,7 @@ class LintStepCoverage(unittest.TestCase):
             }
         )
         self.assertEqual(frozenset(BANNED_C_API_NAMES), former_cfg)
-        self.assertTrue(BANNED_HEAP_C_API_NAMES <= frozenset(BANNED_C_API_NAMES))
+        self.assertTrue(frozenset(BANNED_C_API_NAMES) >= BANNED_HEAP_C_API_NAMES)
         self.assertFalse((CONFIG_DIR / "cppcheck-forbidden-apis.cfg").is_file())
 
     def test_policy_overrides_required_and_rejects_bad_shape(self) -> None:
@@ -810,6 +800,73 @@ class LintStepCoverage(unittest.TestCase):
                 }
             ]
             self.assertEqual(validate_policy_overrides(ok_db, manifest, root), [])
+
+    def test_policy_overrides_openssf_cross_opt_in_shape(self) -> None:
+        """``cross`` is optional and openssf-hardening-only; tokens must be host-only
+        OpenSSF flags. Other override blocks keep the strict add/remove/by_compile_db
+        vocabulary."""
+        from policy_overrides import openssf_cross_opt_in, validate_policy_overrides
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_policy_test_manifest(root)
+            manifest = root / ".github/lint-c-cpp.yaml"
+            data = __import__("yaml").safe_load(manifest.read_text(encoding="utf-8"))
+            copy = __import__("copy")
+
+            ok = copy.deepcopy(data)
+            ok["policy"]["overrides"]["openssf-hardening"]["cross"] = [
+                "LINKER:-z,pack-relative-relocs"
+            ]
+            self.assertEqual(validate_policy_overrides(ok, manifest, root), [])
+
+            # The full host-only vocabulary (probe-gated DT_RELR + the genex-gated
+            # dynamic-loader link flags) is accepted together.
+            full = copy.deepcopy(data)
+            full["policy"]["overrides"]["openssf-hardening"]["cross"] = [
+                "-pie",
+                "LINKER:-z,noexecstack",
+                "LINKER:-z,now",
+                "LINKER:-z,pack-relative-relocs",
+                "LINKER:-z,relro",
+            ]
+            self.assertEqual(validate_policy_overrides(full, manifest, root), [])
+
+            null_cross = copy.deepcopy(data)
+            null_cross["policy"]["overrides"]["openssf-hardening"]["cross"] = None
+            self.assertEqual(validate_policy_overrides(null_cross, manifest, root), [])
+
+            bad_token = copy.deepcopy(data)
+            bad_token["policy"]["overrides"]["openssf-hardening"]["cross"] = [
+                "LINKER:--gc-sections"
+            ]
+            issues = validate_policy_overrides(bad_token, manifest, root)
+            self.assertTrue(any("not a host-only OpenSSF flag" in item for item in issues), issues)
+
+            empty = copy.deepcopy(data)
+            empty["policy"]["overrides"]["openssf-hardening"]["cross"] = []
+            issues = validate_policy_overrides(empty, manifest, root)
+            self.assertTrue(
+                any("openssf-hardening.cross must be null" in item for item in issues), issues
+            )
+
+            wrong_block = copy.deepcopy(data)
+            wrong_block["policy"]["overrides"]["cppcheck"]["cross"] = [
+                "LINKER:-z,pack-relative-relocs"
+            ]
+            issues = validate_policy_overrides(wrong_block, manifest, root)
+            self.assertTrue(
+                any("unknown policy.overrides.cppcheck fields: cross" in item for item in issues),
+                issues,
+            )
+
+            # Reader: absent -> empty tuple; present -> stripped tokens.
+            self.assertEqual(openssf_cross_opt_in(root), ())
+            ok["policy"]["overrides"]["openssf-hardening"]["cross"] = [
+                " LINKER:-z,pack-relative-relocs "
+            ]
+            manifest.write_text(__import__("yaml").safe_dump(ok), encoding="utf-8")
+            self.assertEqual(openssf_cross_opt_in(root), ("LINKER:-z,pack-relative-relocs",))
 
     def test_apply_clang_tidy_checks_overrides_add_and_remove(self) -> None:
         from policy_overrides import apply_clang_tidy_checks_overrides
@@ -875,7 +932,6 @@ class LintStepCoverage(unittest.TestCase):
                 tidy.split("Checks:", 1)[1].split("WarningsAsErrors", 1)[0],
                 kit_tidy.split("Checks:", 1)[1].split("WarningsAsErrors", 1)[0],
             )
-
 
     def test_override_regression_format_tidy_openssf_global_and_by_compile_db(self) -> None:
         """Regression: format / tidy / OpenSSF overrides -- global and by_compile_db."""
@@ -956,9 +1012,12 @@ class LintStepCoverage(unittest.TestCase):
         null_block = "      add: null\n      remove: null\n      by_compile_db: null\n"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            write(root / ".github/lint-c-cpp.yaml", _base_manifest(
-                format_block=null_block, tidy_c_block=null_block, openssf_block=null_block
-            ))
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                _base_manifest(
+                    format_block=null_block, tidy_c_block=null_block, openssf_block=null_block
+                ),
+            )
             write(root / "firmware/src/fw.c", "void fw(void) {}\n")
             write(root / "tests/host.c", "void host(void) {}\n")
             write(root / "include/sample/sample_null.h", "#pragma once\n")
@@ -991,7 +1050,8 @@ class LintStepCoverage(unittest.TestCase):
             self.assertIn("ColumnLimit: 100", fmt)
             self.assertNotIn("SortIncludes", fmt)
             tidy = apply_clang_tidy_checks_overrides(
-                "---\nChecks: >\n  bugprone-*,\n  readability-identifier-naming,\n\nWarningsAsErrors: '*'\n",
+                "---\nChecks: >\n  bugprone-*,\n  readability-identifier-naming,\n\n"
+                "WarningsAsErrors: '*'\n",
                 add=("readability-magic-numbers",),
                 remove=("readability-identifier-naming",),
             )
@@ -1022,9 +1082,12 @@ class LintStepCoverage(unittest.TestCase):
                 + "".join(f"        - {flag}\n" for flag in werror_family)
                 + "      by_compile_db: null\n"
             )
-            write(root / ".github/lint-c-cpp.yaml", _base_manifest(
-                format_block=fmt_global, tidy_c_block=tidy_global, openssf_block=openssf_global
-            ))
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                _base_manifest(
+                    format_block=fmt_global, tidy_c_block=tidy_global, openssf_block=openssf_global
+                ),
+            )
             materialize_override_configs(root, LINT_KIT, out)
             fmt_out = (out / ".clang-format").read_text(encoding="utf-8")
             self.assertIn("ColumnLimit: 88", fmt_out)
@@ -1074,12 +1137,12 @@ class LintStepCoverage(unittest.TestCase):
                 "      by_compile_db:\n"
                 f"        - compile_commands_json: {fw_json}\n"
                 "          add: null\n"
-                "          remove:\n"
-                + "".join(f"            - {flag}\n" for flag in werror_family)
+                "          remove:\n" + "".join(f"            - {flag}\n" for flag in werror_family)
             )
-            write(root / ".github/lint-c-cpp.yaml", _base_manifest(
-                format_block=fmt_by, tidy_c_block=tidy_by, openssf_block=openssf_by
-            ))
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                _base_manifest(format_block=fmt_by, tidy_c_block=tidy_by, openssf_block=openssf_by),
+            )
             # Write DBs before ownership / dial resolution.
             fw_path = root / fw_json
             host_path = root / host_json
@@ -1092,8 +1155,9 @@ class LintStepCoverage(unittest.TestCase):
                 "-fstack-protector-strong -fhardened -fcf-protection=full -O2 -fexceptions"
             )
             fw_cmd = (
-                host_flags.replace(" -Werror -Werror=format-security", "")
-                .replace("-fhardened", "-Whardened")
+                host_flags.replace(" -Werror -Werror=format-security", "").replace(
+                    "-fhardened", "-Whardened"
+                )
                 + f" -c {(root / 'firmware/src/fw.c').resolve()}"
             )
             fw_cmd = f"arm-none-eabi-gcc {fw_cmd}"
@@ -1115,8 +1179,7 @@ class LintStepCoverage(unittest.TestCase):
                         {
                             "directory": str(root),
                             "command": (
-                                f"/usr/bin/cc {host_flags} -c "
-                                f"{(root / 'tests/host.c').resolve()}"
+                                f"/usr/bin/cc {host_flags} -c {(root / 'tests/host.c').resolve()}"
                             ),
                             "file": str((root / "tests/host.c").resolve()),
                         }
@@ -1138,14 +1201,14 @@ class LintStepCoverage(unittest.TestCase):
             fw_fmt = (out / f".clang-format.by-{fw_slug}").read_text(encoding="utf-8")
             self.assertIn("ColumnLimit: 77", fw_fmt)
             self.assertNotIn("IncludeBlocks:", fw_fmt)
-            self.assertFalse((out / f".clang-format.by-{compile_db_override_slug(host_json)}").exists())
+            self.assertFalse(
+                (out / f".clang-format.by-{compile_db_override_slug(host_json)}").exists()
+            )
 
             # Dial resolution: firmware gets by_db remove; host only global add.
             _a, fw_remove = override_dials_for_source(root, "clang-tidy-c", "firmware/src/fw.c")
             self.assertIn("bugprone-easily-swappable-parameters", fw_remove or ())
-            host_add, host_remove = override_dials_for_source(
-                root, "clang-tidy-c", "tests/host.c"
-            )
+            host_add, host_remove = override_dials_for_source(root, "clang-tidy-c", "tests/host.c")
             self.assertIn("modernize-use-nullptr", host_add or ())
             self.assertIsNone(host_remove)
             # Global+by_db merge on firmware: global add kept, by_db remove applied.
@@ -1161,10 +1224,7 @@ class LintStepCoverage(unittest.TestCase):
                 },
                 "tests/host.c": {
                     "directory": str(root),
-                    "command": (
-                        f"/usr/bin/cc {host_flags} -c "
-                        f"{(root / 'tests/host.c').resolve()}"
-                    ),
+                    "command": (f"/usr/bin/cc {host_flags} -c {(root / 'tests/host.c').resolve()}"),
                     "file": str((root / "tests/host.c").resolve()),
                 },
             }
@@ -1175,8 +1235,11 @@ class LintStepCoverage(unittest.TestCase):
             def mock_compiler_target(compiler: Path) -> str | None:
                 return "arm-none-eabi" if "arm-none" in compiler.name else "x86_64-host"
 
-            with patch.object(compile_db_util, "host_target_triple", mock_host_triple), patch.object(
-                compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+            with (
+                patch.object(compile_db_util, "host_target_triple", mock_host_triple),
+                patch.object(
+                    compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+                ),
             ):
                 issues = verify_compile_commands_openssf(
                     root,
@@ -1231,7 +1294,7 @@ class LintStepCoverage(unittest.TestCase):
             self.assertIn("modernize-use-nullptr", host_cfg)
             # Host-only config must not disable the firmware-only remove unless global.
             # (remove is by_db firmware-only; host may still list the check enabled.)
-            host_enabled = [
+            [
                 t.strip()
                 for t in host_cfg.split("Checks:", 1)[1].split("WarningsAsErrors", 1)[0].split(",")
                 if t.strip() and not t.strip().startswith("-") and t.strip() != ">"
@@ -1253,7 +1316,6 @@ class LintStepCoverage(unittest.TestCase):
             self.assertIn("-bugprone-easily-swappable-parameters", direct)
 
     def test_openssf_override_materialize_and_audit_covers_nfc_cases(self) -> None:
-
         """OpenSSF overrides must affect materialize + compile-DB audit (NFC dual-board).
 
         Cases: null (kit strict), global remove/add, by_compile_db firmware-only -Werror
@@ -1292,9 +1354,7 @@ class LintStepCoverage(unittest.TestCase):
             "-Werror=int-conversion",
         ]
         kit_manifest = load_hardening_manifest(LINT_KIT)
-        kit_flags = {
-            str(item) for item in kit_manifest.get("coverage", {}).get("flags", [])
-        }
+        kit_flags = {str(item) for item in kit_manifest.get("coverage", {}).get("flags", [])}
         for flag in werror_family:
             self.assertIn(flag, kit_flags)
 
@@ -1302,9 +1362,7 @@ class LintStepCoverage(unittest.TestCase):
         stripped = apply_openssf_coverage_flag_overrides(
             kit_manifest, add=None, remove=tuple(werror_family)
         )
-        stripped_flags = {
-            str(item) for item in stripped.get("coverage", {}).get("flags", [])
-        }
+        stripped_flags = {str(item) for item in stripped.get("coverage", {}).get("flags", [])}
         for flag in werror_family:
             self.assertNotIn(flag, stripped_flags)
         self.assertIn("-Wall", stripped_flags)
@@ -1327,16 +1385,13 @@ class LintStepCoverage(unittest.TestCase):
         write_license_only_manifest(license_root)
         generated_make = generate_hardening_flags_mk(augmented, repo_root=license_root)
         c_line = next(
-            line for line in generated_make.splitlines()
-            if line.startswith("NERO_OPENSSF_CFLAGS")
+            line for line in generated_make.splitlines() if line.startswith("NERO_OPENSSF_CFLAGS")
         )
         cxx_line = next(
-            line for line in generated_make.splitlines()
-            if line.startswith("NERO_OPENSSF_CXXFLAGS")
+            line for line in generated_make.splitlines() if line.startswith("NERO_OPENSSF_CXXFLAGS")
         )
         cpp_line = next(
-            line for line in generated_make.splitlines()
-            if line.startswith("NERO_OPENSSF_CPPFLAGS")
+            line for line in generated_make.splitlines() if line.startswith("NERO_OPENSSF_CPPFLAGS")
         )
         self.assertIn("-fNFC-test-flag", c_line)
         self.assertIn("-fNFC-test-flag", cxx_line)
@@ -1354,11 +1409,10 @@ class LintStepCoverage(unittest.TestCase):
             "-fstack-protector-strong -fhardened -fcf-protection=full -O2 -fexceptions"
         )
         # Firmware without in-command -Werror* (out-of-band gate / Arduino vendor noise).
-        fw_flags_no_werror = (
-            host_flags.replace(" -Werror -Werror=format-security", "")
-            .replace("-fhardened", "-Whardened")
+        fw_flags_no_werror = host_flags.replace(" -Werror -Werror=format-security", "").replace(
+            "-fhardened", "-Whardened"
         )
-        cross_flags_full = host_flags.replace("-fhardened", "-Whardened")
+        host_flags.replace("-fhardened", "-Whardened")
 
         def _nfc_repo(root: Path, *, openssf_overrides: str) -> None:
             write(
@@ -1431,11 +1485,7 @@ class LintStepCoverage(unittest.TestCase):
                 encoding="utf-8",
             )
 
-        null_overrides = (
-            "      add: null\n"
-            "      remove: null\n"
-            "      by_compile_db: null\n"
-        )
+        null_overrides = "      add: null\n      remove: null\n      by_compile_db: null\n"
         global_remove = (
             "      add: null\n"
             "      remove:\n"
@@ -1443,10 +1493,7 @@ class LintStepCoverage(unittest.TestCase):
             + "      by_compile_db: null\n"
         )
         global_add = (
-            "      add:\n"
-            "        - -fNFC-test-flag\n"
-            "      remove: null\n"
-            "      by_compile_db: null\n"
+            "      add:\n        - -fNFC-test-flag\n      remove: null\n      by_compile_db: null\n"
         )
         fw_by_db = (
             "      add: null\n"
@@ -1458,8 +1505,7 @@ class LintStepCoverage(unittest.TestCase):
             + "".join(f"            - {flag}\n" for flag in werror_family)
             + "        - compile_commands_json: build/lint/firmware/nucleo/compile_commands.json\n"
             "          add: null\n"
-            "          remove:\n"
-            + "".join(f"            - {flag}\n" for flag in werror_family)
+            "          remove:\n" + "".join(f"            - {flag}\n" for flag in werror_family)
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1527,15 +1573,11 @@ class LintStepCoverage(unittest.TestCase):
                 "# probes unconfigured in this fixture\n", encoding="utf-8"
             )
 
-            add, remove = openssf_override_dials_for_source(
-                root, "firmware/nfc/src/board.c"
-            )
+            _add, remove = openssf_override_dials_for_source(root, "firmware/nfc/src/board.c")
             self.assertTrue(remove)
             for flag in werror_family:
-                self.assertIn(flag, remove)
-            host_add, host_remove = openssf_override_dials_for_source(
-                root, "tests/host_ut.c"
-            )
+                self.assertIn(flag, remove or ())
+            _host_add, host_remove = openssf_override_dials_for_source(root, "tests/host_ut.c")
             self.assertIsNone(host_remove)
 
             entries = {
@@ -1558,8 +1600,7 @@ class LintStepCoverage(unittest.TestCase):
                 "tests/host_ut.c": {
                     "directory": str(root),
                     "command": (
-                        f"/usr/bin/cc {host_flags} -c "
-                        f"{(root / 'tests/host_ut.c').resolve()}"
+                        f"/usr/bin/cc {host_flags} -c {(root / 'tests/host_ut.c').resolve()}"
                     ),
                     "file": str((root / "tests/host_ut.c").resolve()),
                 },
@@ -1575,8 +1616,11 @@ class LintStepCoverage(unittest.TestCase):
                     return "arm-none-eabi"
                 return "x86_64-host"
 
-            with patch.object(compile_db_util, "host_target_triple", mock_host_triple), patch.object(
-                compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+            with (
+                patch.object(compile_db_util, "host_target_triple", mock_host_triple),
+                patch.object(
+                    compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+                ),
             ):
                 issues = verify_compile_commands_openssf(
                     root,
@@ -1625,8 +1669,7 @@ class LintStepCoverage(unittest.TestCase):
                 )
                 self.assertTrue(
                     any(
-                        "firmware/nfc/src/board.c" in item and "-Werror" in item
-                        for item in issues
+                        "firmware/nfc/src/board.c" in item and "-Werror" in item for item in issues
                     ),
                     issues,
                 )
@@ -1662,15 +1705,15 @@ class LintStepCoverage(unittest.TestCase):
                 )
                 self.assertEqual(issues, [], issues)
 
-
     def test_override_by_compile_db_ownership_and_tidy_cppcheck_dials(self) -> None:
         """by_compile_db uses firmware-prefer ownership; tidy/cppcheck dials apply."""
         import io
         from contextlib import redirect_stdout
+
         from policy_overrides import (
             apply_cppcheck_cli_dials,
-            owning_compile_commands_json,
             override_dials_for_source,
+            owning_compile_commands_json,
         )
 
         if str(COMPILE_DB_DIR) not in sys.path:
@@ -1760,16 +1803,12 @@ class LintStepCoverage(unittest.TestCase):
                 owning_compile_commands_json(root, "tests/host.c"),
                 "build/lint/tests/compile_commands.json",
             )
-            _add, remove = override_dials_for_source(
-                root, "clang-tidy-c", "firmware/src/fw.c"
-            )
+            _add, remove = override_dials_for_source(root, "clang-tidy-c", "firmware/src/fw.c")
             self.assertIn("bugprone-easily-swappable-parameters", remove or ())
-            _add, host_remove = override_dials_for_source(
-                root, "clang-tidy-c", "tests/host.c"
-            )
+            _add, host_remove = override_dials_for_source(root, "clang-tidy-c", "tests/host.c")
             self.assertIsNone(host_remove)
 
-            enable, suppress = apply_cppcheck_cli_dials(
+            _enable, suppress = apply_cppcheck_cli_dials(
                 ["warning"],
                 [],
                 add=None,
@@ -1805,7 +1844,9 @@ class LintStepCoverage(unittest.TestCase):
             out = buf.getvalue()
             self.assertIn(".clang-tidy-c.by-build__lint__firmware__compile_commands_json", out)
             self.assertTrue(
-                (merge_dir / ".clang-tidy-c.by-build__lint__firmware__compile_commands_json").is_file()
+                (
+                    merge_dir / ".clang-tidy-c.by-build__lint__firmware__compile_commands_json"
+                ).is_file()
             )
             fw_cfg = (
                 merge_dir / ".clang-tidy-c.by-build__lint__firmware__compile_commands_json"
@@ -1859,11 +1900,15 @@ class LintStepCoverage(unittest.TestCase):
                 "    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("policy.overrides is required", result.stderr)
@@ -1885,9 +1930,7 @@ class LintStepCoverage(unittest.TestCase):
         self.assertNotIn("library", block)
         self.assertNotIn("scan", block)
         self.assertNotIn("standards_fallback", block)
-        self.assertEqual(
-            block["cli"]["enable"], ["warning", "style", "performance", "portability"]
-        )
+        self.assertEqual(block["cli"]["enable"], ["warning", "style", "performance", "portability"])
         self.assertIn("--check-level=exhaustive", block["cli"]["flags"])
         self.assertIn("--library=posix", block["cli"]["flags"])
         self.assertIn("constParameterCallback", block["cli"]["suppressions"])
@@ -1947,7 +1990,8 @@ class LintStepCoverage(unittest.TestCase):
                 fakebin,
                 "codespell",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--help' ]]; then echo 'codespell --ignore-multiline-regex'; exit 0; fi\n"
+                "if [[ ${1:-} == '--help' ]]; then echo 'codespell --ignore-multiline-regex'; exit "
+                "0; fi\n"
                 "if [[ ${1:-} == '--version' ]]; then echo 'codespell 2.4.2'; exit 0; fi\n"
                 "exit 0\n",
             )
@@ -1979,8 +2023,7 @@ class LintStepCoverage(unittest.TestCase):
                 env=env,
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("codespell not found", result.stderr)
@@ -2003,8 +2046,7 @@ class LintStepCoverage(unittest.TestCase):
                 env=env,
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("--ignore-multiline-regex", result.stderr)
@@ -2036,7 +2078,8 @@ class LintStepCoverage(unittest.TestCase):
                 fakebin,
                 "codespell",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--help' ]]; then echo 'codespell --ignore-multiline-regex'; exit 0; fi\n"
+                "if [[ ${1:-} == '--help' ]]; then echo 'codespell --ignore-multiline-regex'; exit "
+                "0; fi\n"
                 "if [[ ${1:-} == '--version' ]]; then echo 'codespell 2.4.2'; exit 0; fi\n"
                 "exit 0\n",
             )
@@ -2056,8 +2099,7 @@ class LintStepCoverage(unittest.TestCase):
                 env=env,
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertNotEqual(result.returncode, 0)
 
@@ -2072,7 +2114,7 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn('source "${toolchain}/python_lint.sh"', lint_sh)
         self.assertIn("run lint_kit_python_lint_self_test", lint_sh)
         self.assertIn('run bash "${toolchain}/python_lint.sh"', lint_sh)
-        self.assertNotIn('section python_lint', lint_sh)
+        self.assertNotIn("section python_lint", lint_sh)
         # The python steps live under the format section, after codespell.
         format_idx = lint_sh.index("section format ")
         codespell_idx = lint_sh.index('run bash "${toolchain}/codespell.sh"')
@@ -2102,8 +2144,7 @@ class LintStepCoverage(unittest.TestCase):
             ],
             check=False,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("python_lint self-test: OK", result.stdout)
@@ -2114,32 +2155,45 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("compile_db is required", result.stderr)
 
     def _run_manifest_validate(self, root: Path):
         return subprocess.run(
-            [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"),
-             "--repo-root", str(root)],
-            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            [
+                sys.executable,
+                str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                "--repo-root",
+                str(root),
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
         )
 
-    def _write_userspace_only_manifest(self, root: Path, *, firmware: str, userspace: str,
-                                       jobs: list[str]) -> None:
+    def _write_userspace_only_manifest(
+        self, root: Path, *, firmware: str, userspace: str, jobs: list[str]
+    ) -> None:
         (root / "core").mkdir(parents=True, exist_ok=True)
         enabled = "enabled_lint_jobs:\n" + "".join(f"  - {job}\n" for job in jobs)
         write(
@@ -2151,18 +2205,28 @@ class LintStepCoverage(unittest.TestCase):
             f"compile_db:\n  firmware: {firmware}\n  userspace: {userspace}\n"
             + enabled
             + "policy:\n  constants_headers: [limits.h]\n  nolint_allowed: null\n"
-            + _NULL_OVERRIDES_YAML +
-            "  unsafe_api:\n    header: sample_null.h\n"
+            + _NULL_OVERRIDES_YAML
+            + "  unsafe_api:\n    header: sample_null.h\n"
             "    include_headers: [attrs.h]\n"
             "    wrapper_files: [include/sample/sample_null.h]\n"
             "firmware_build: null\nspec_traceability: null\n"
             "toolchain: null\nworkflow: null\nyamllint: null\n",
         )
 
-    _USERSPACE_ONLY_JOBS = [
-        "license", "format", "openssf", "compile_db", "clang_tidy", "banned_cxx_heap",
-        "banned_libc_io", "null_nodiscard", "guard_clause_style", "pointer_bounds",
-        "raii_lifetime", "nolint_audit", "cppcheck",
+    _USERSPACE_ONLY_JOBS: ClassVar[list[str]] = [
+        "license",
+        "format",
+        "openssf",
+        "compile_db",
+        "clang_tidy",
+        "banned_cxx_heap",
+        "banned_libc_io",
+        "null_nodiscard",
+        "guard_clause_style",
+        "pointer_bounds",
+        "raii_lifetime",
+        "nolint_audit",
+        "cppcheck",
     ]
 
     def test_manifest_validate_allows_userspace_only_compile_db(self) -> None:
@@ -2173,7 +2237,7 @@ class LintStepCoverage(unittest.TestCase):
                 root,
                 firmware="null",
                 userspace="[{compile_commands_json: build/lint/userspace/compile_commands.json, "
-                          "source: '.', cmake_args: null}]",
+                "source: '.', cmake_args: null}]",
                 jobs=self._USERSPACE_ONLY_JOBS,
             )
             result = self._run_manifest_validate(root)
@@ -2184,7 +2248,10 @@ class LintStepCoverage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_userspace_only_manifest(
-                root, firmware="[]", userspace="[]", jobs=self._USERSPACE_ONLY_JOBS,
+                root,
+                firmware="[]",
+                userspace="[]",
+                jobs=self._USERSPACE_ONLY_JOBS,
             )
             result = self._run_manifest_validate(root)
         self.assertEqual(result.returncode, 1)
@@ -2198,8 +2265,8 @@ class LintStepCoverage(unittest.TestCase):
                 root,
                 firmware="[]",
                 userspace="[{compile_commands_json: build/lint/userspace/compile_commands.json, "
-                          "source: '.', cmake_args: null}]",
-                jobs=self._USERSPACE_ONLY_JOBS + ["firmware_compile_db"],
+                "source: '.', cmake_args: null}]",
+                jobs=[*self._USERSPACE_ONLY_JOBS, "firmware_compile_db"],
             )
             result = self._run_manifest_validate(root)
         self.assertEqual(result.returncode, 1)
@@ -2266,14 +2333,18 @@ class LintStepCoverage(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            write(root / "fw/src/host.cpp",
-                  '#include "impl.cpp"\n#include NFC_STRINGIFY(BOARD_UNIT)\n')
+            write(
+                root / "fw/src/host.cpp",
+                '#include "impl.cpp"\n#include NFC_STRINGIFY(BOARD_UNIT)\n',
+            )
             write(root / "fw/src/impl.cpp", "int impl(void){return 0;}\n")
             write(root / "fw/port/board_unit.cpp", "int board(void){return 1;}\n")
             write(root / "fw/orphan/orphan.cpp", "int orphan(void){return 2;}\n")
             command = (
-                "arm-none-eabi-g++ -I" + str(root / "fw/port")
-                + " -DBOARD_UNIT=board_unit.cpp -c " + str(root / "fw/src/host.cpp")
+                "arm-none-eabi-g++ -I"
+                + str(root / "fw/port")
+                + " -DBOARD_UNIT=board_unit.cpp -c "
+                + str(root / "fw/src/host.cpp")
             )
             covered = compile_db_util.amalgamation_included_source_keys(
                 root, iter([(root / "fw/src/host.cpp", command)])
@@ -2316,18 +2387,17 @@ class LintStepCoverage(unittest.TestCase):
             issues = verify_compile_commands_openssf(
                 root, LINT_KIT, entries_by_key=entries, source_paths=[host, child]
             )
-        self.assertTrue(any("core/child.c" in item and "missing" in item for item in issues), issues)
+        self.assertTrue(
+            any("core/child.c" in item and "missing" in item for item in issues), issues
+        )
         self.assertTrue(any("core/host.c" in item and "missing" in item for item in issues), issues)
 
     def test_hardening_include_wiring_requires_by_slug_for_dialed_compile_db(self) -> None:
         """Dialed Hardening.by-<slug> must be included by that compile_db's CMakeLists."""
         from hardening_verify import (
+            _expected_consumer_hardening_modules,
             load_hardening_manifest,
             verify_hardening_include_wiring,
-            write_generated_hardening_cmake,
-            write_generated_probes_cmake,
-            _expected_consumer_hardening_modules,
-            _normalize_generated_cmake,
         )
         from policy_overrides import compile_db_override_slug
 
@@ -2362,9 +2432,7 @@ class LintStepCoverage(unittest.TestCase):
                 ),
             )
             kit_manifest = load_hardening_manifest(LINT_KIT)
-            for name, body in _expected_consumer_hardening_modules(
-                root, kit_manifest
-            ).items():
+            for name, body in _expected_consumer_hardening_modules(root, kit_manifest).items():
                 (root / "cmake" / name).write_text(body, encoding="utf-8")
             slug = compile_db_override_slug(fw_json)
             by_name = f"Hardening.by-{slug}.cmake"
@@ -2413,9 +2481,9 @@ class LintStepCoverage(unittest.TestCase):
     def test_hardening_flags_mk_arduino_wiring_without_cmake_include(self) -> None:
         """Firmware by_compile_db may wire via Hardening.flags.by-*.mk only (Arduino)."""
         from hardening_verify import (
+            _expected_consumer_hardening_modules,
             load_hardening_manifest,
             verify_hardening_include_wiring,
-            _expected_consumer_hardening_modules,
         )
         from policy_overrides import compile_db_override_slug
 
@@ -2451,9 +2519,7 @@ class LintStepCoverage(unittest.TestCase):
                 ),
             )
             kit_manifest = load_hardening_manifest(LINT_KIT)
-            for name, body in _expected_consumer_hardening_modules(
-                root, kit_manifest
-            ).items():
+            for name, body in _expected_consumer_hardening_modules(root, kit_manifest).items():
                 (root / "cmake" / name).write_text(body, encoding="utf-8")
             slug = compile_db_override_slug(fw_json)
             flags_mk = f"Hardening.flags.by-{slug}.mk"
@@ -2483,6 +2549,45 @@ class LintStepCoverage(unittest.TestCase):
             )
             self.assertEqual(issues, [], issues)
 
+    def test_manifest_covers_openssf_guide_tables_snapshot(self) -> None:
+        """Every OpenSSF guide Table 1 / Table 2 token (config/openssf-guide-tables.txt)
+        must be in coverage.flags / coverage.definitions. The manifest was originally
+        transcribed by hand and -fzero-call-used-regs=used-gpr (Table 2) was missed
+        for a release; this pins the normative tables so drift is a test failure."""
+        from hardening_verify import load_hardening_manifest
+
+        manifest = load_hardening_manifest(LINT_KIT)
+        flags = {str(item) for item in manifest["coverage"]["flags"]}
+        defs = {str(item) for item in manifest["coverage"].get("definitions", [])}
+        snapshot = (CONFIG_DIR / "openssf-guide-tables.txt").read_text(encoding="utf-8")
+        required_flags: list[str] = []
+        required_defs: list[str] = []
+        skipped: list[str] = []
+        for raw in snapshot.splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("skip:"):
+                skipped.append(line[len("skip:") :].strip())
+                self.assertIn("#", raw, f"skip line needs a reason comment: {raw!r}")
+            elif line.startswith("def:"):
+                required_defs.append(line[len("def:") :].strip())
+            else:
+                required_flags.append(line)
+        self.assertGreaterEqual(len(required_flags), 30, "snapshot looks truncated")
+        missing_flags = [flag for flag in required_flags if flag not in flags]
+        missing_defs = [item for item in required_defs if item not in defs]
+        self.assertEqual(
+            missing_flags, [], f"guide table flags not in coverage.flags: {missing_flags}"
+        )
+        self.assertEqual(
+            missing_defs, [], f"guide table defs not in coverage.definitions: {missing_defs}"
+        )
+        for token in skipped:
+            self.assertNotIn(
+                token, flags, f"skip:{token} is listed but also covered; drop the skip"
+            )
+
     def test_generate_hardening_cmake_gates_compile_arch_fcf_protection(self) -> None:
         """-fcf-protection must be host+x86_64 gated, never a bare cross compile option."""
         from hardening_verify import generate_hardening_cmake, load_hardening_manifest
@@ -2498,10 +2603,184 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn("_hardening_host", body)
         self.assertIn("x86_64", body)
 
+    def test_generate_hardening_keeps_minsizerel_size_optimization(self) -> None:
+        """-O2 rides Release/RelWithDebInfo only: target options follow
+        CMAKE_C_FLAGS_<CONFIG>, so -O2 would override MinSizeRel's -Os. Fortify
+        still covers MinSizeRel, and the gate audit must not accept the narrower
+        alias for a MinSizeRel gate."""
+        from hardening_verify import (
+            _line_satisfies_genex_gate,
+            compile_db_audit_flags_for_context,
+            generate_hardening_cmake,
+            load_hardening_manifest,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            manifest = load_hardening_manifest(LINT_KIT)
+            body = generate_hardening_cmake(manifest, repo_root=license_root)
+        self.assertIn(
+            "  set(_hardening_speed_cfg $<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>)\n",
+            body,
+        )
+        o2_lines = [line for line in body.splitlines() if line.rstrip().endswith(":-O2>>")]
+        self.assertTrue(o2_lines, body)
+        for line in o2_lines:
+            self.assertIn("${_hardening_speed_cfg}", line)
+            self.assertNotIn("_hardening_fortify_cfg", line)
+        for build_type, expect_o2, expect_fortify in (
+            ("Release", True, True),
+            ("RelWithDebInfo", True, True),
+            ("MinSizeRel", False, True),
+            ("Debug", False, False),
+        ):
+            flags, _ = compile_db_audit_flags_for_context(
+                manifest,
+                cross_compile=False,
+                probe_cache={},
+                language="C",
+                command="",
+                build_type=build_type,
+            )
+            with self.subTest(build_type=build_type):
+                self.assertEqual("-O2" in flags, expect_o2)
+                self.assertEqual("-D_FORTIFY_SOURCE=3" in flags, expect_fortify)
+        o2_line = "$<$<AND:$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,${_hardening_speed_cfg}>:-O2>"
+        self.assertTrue(
+            _line_satisfies_genex_gate(
+                o2_line, ["CMAKE_CROSSCOMPILING", "CONFIG:Release", "CONFIG:RelWithDebInfo"]
+            )
+        )
+        self.assertFalse(_line_satisfies_genex_gate(o2_line, ["CONFIG:MinSizeRel"]))
+
     def test_generate_hardening_gates_fhardened_off_under_sanitizer(self) -> None:
         """-fhardened/-Whardened must drop under instrumented sanitizers (they enable
         _FORTIFY_SOURCE, which conflicts with the sanitizers and whose fortified libc
-        inlines defeat -Wl,--wrap test hooks); the probe must also see add_compile_options."""
+        inlines defeat -Wl,--wrap test hooks) and outside the optimized configs
+        (_FORTIFY_SOURCE needs optimization: -O0 Debug trips -Werror=hardened);
+        the probe must also see add_compile_options."""
+        from hardening_verify import (
+            compile_db_audit_flags_for_context,
+            generate_hardening_cmake,
+            generate_probes_cmake,
+            load_hardening_manifest,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            manifest = load_hardening_manifest(LINT_KIT)
+            body = generate_hardening_cmake(manifest, repo_root=license_root)
+            probes = generate_probes_cmake(manifest, repo_root=license_root)
+        # -fhardened is gated on its probe AND NOT instrumented-sanitizer AND the
+        # optimized configs that _FORTIFY_SOURCE uses.
+        self.assertIn(
+            "$<$<AND:$<BOOL:${HAVE_C_FHARDENED}>,"
+            "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,"
+            "${_hardening_fortify_cfg}>:-fhardened>",
+            body,
+        )
+        self.assertNotIn("$<$<BOOL:${HAVE_C_FHARDENED}>:-fhardened>", body)
+        self.assertIn(
+            "$<$<AND:$<BOOL:${HAVE_C_WHARDENED}>,"
+            "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>,"
+            "${_hardening_fortify_cfg}>:-Whardened>",
+            body,
+        )
+        # The compile-DB audit requires them exactly where the generator emits them.
+        probe_cache = {"HAVE_C_FHARDENED": True, "HAVE_C_WHARDENED": True}
+        for build_type, command, expected in (
+            ("Release", "", True),
+            ("RelWithDebInfo", "", True),
+            ("MinSizeRel", "", True),
+            ("Debug", "", False),
+            (None, "", False),
+            ("Release", "cc -fsanitize=address -c a.c", False),
+        ):
+            flags, _ = compile_db_audit_flags_for_context(
+                manifest,
+                cross_compile=False,
+                probe_cache=probe_cache,
+                language="C",
+                command=command,
+                build_type=build_type,
+            )
+            for flag in ("-fhardened", "-Whardened"):
+                with self.subTest(build_type=build_type, command=command, flag=flag):
+                    self.assertEqual(flag in flags, expected)
+        # NOT_FHARDENED is per language. CXX fortify and the C++ stdlib defs
+        # follow HAVE_CXX_FHARDENED; the C probe must not gate them.
+        for line in body.splitlines():
+            if "COMPILE_LANGUAGE:CXX" in line and "_FORTIFY_SOURCE" in line:
+                self.assertIn("HAVE_CXX_FHARDENED", line)
+                self.assertNotIn("HAVE_C_FHARDENED", line)
+            elif "COMPILE_LANGUAGE:C>" in line and "_FORTIFY_SOURCE" in line:
+                self.assertIn("HAVE_C_FHARDENED", line)
+                self.assertNotIn("HAVE_CXX_FHARDENED", line)
+            elif any(
+                token in line
+                for token in (
+                    "_GLIBCXX_ASSERTIONS",
+                    "_LIBCPP_HARDENING_MODE_FAST",
+                    "_LIBCPP_HARDENING_MODE_EXTENSIVE",
+                )
+            ):
+                self.assertIn("HAVE_CXX_FHARDENED", line)
+                self.assertNotIn("HAVE_C_FHARDENED", line)
+        # The probe also detects sanitizers set via add_compile_options/add_link_options.
+        self.assertIn(
+            "get_directory_property(_hardening_dir_compile_options COMPILE_OPTIONS)", probes
+        )
+        self.assertIn("-fsanitize", probes)
+
+    def test_generate_hardening_cxx_stdlib_definitions_never_reach_c(self) -> None:
+        """Every cmake.CXX definition must be wrapped in $<COMPILE_LANGUAGE:CXX>.
+
+        A C-only consumer never probes HAVE_CXX_FHARDENED, so a bare
+        $<NOT:$<BOOL:${HAVE_CXX_FHARDENED}>> gate is always true there and
+        -D_GLIBCXX_ASSERTIONS lands on C TUs next to -fhardened; GCC rejects that
+        under -Whardened/-Werror ("not enabled by -fhardened because it was
+        specified in -D")."""
+        from hardening_verify import (
+            _resolve_flag_requirements,
+            generate_hardening_cmake,
+            load_hardening_manifest,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            manifest = load_hardening_manifest(LINT_KIT)
+            body = generate_hardening_cmake(manifest, repo_root=license_root)
+        _req, _probe, _genex, cxx_defs = _resolve_flag_requirements(manifest, "CXX")
+        cxx_def_names = {definition for definition, _gate in cxx_defs if definition}
+        self.assertTrue(cxx_def_names)
+        self.assertIn("_GLIBCXX_ASSERTIONS", cxx_def_names)
+        block = body.split('target_compile_definitions("${HARDENING_TARGET}" INTERFACE', 1)[1]
+        block = block.split("\n  )", 1)[0]
+        for definition in sorted(cxx_def_names):
+            lines = [line for line in block.splitlines() if definition in line]
+            self.assertTrue(lines, definition)
+            for line in lines:
+                self.assertTrue(
+                    line.strip().startswith("$<$<COMPILE_LANGUAGE:CXX>:"),
+                    f"{definition} must be CXX-only: {line.strip()}",
+                )
+                self.assertTrue(line.rstrip().endswith(">>"), line)
+        # No definition line may be language-agnostic unless it is consumer-added.
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(definition in stripped for definition in cxx_def_names):
+                self.assertNotIn("COMPILE_LANGUAGE:C>", stripped)
+
+    def test_generate_hardening_gates_pack_relative_relocs_host_only(self) -> None:
+        """DT_RELR (-z pack-relative-relocs) needs a glibc >= 2.36 loader: gated on the
+        linker probe AND the sysroot libc probe AND (by default) a native build. The
+        linker probe alone is insufficient: GNU ld adds the GLIBC_ABI_DT_RELR verneed
+        even against older glibc, so the link passes and the loader rejects the ELF."""
         from hardening_verify import (
             generate_hardening_cmake,
             generate_probes_cmake,
@@ -2514,28 +2793,215 @@ class LintStepCoverage(unittest.TestCase):
             manifest = load_hardening_manifest(LINT_KIT)
             body = generate_hardening_cmake(manifest, repo_root=license_root)
             probes = generate_probes_cmake(manifest, repo_root=license_root)
-        # -fhardened is gated on both its probe AND NOT instrumented-sanitizer.
         self.assertIn(
-            "$<$<AND:$<BOOL:${HAVE_C_FHARDENED}>,"
-            "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-fhardened>",
+            "$<$<AND:$<BOOL:${HAVE_LINK_Z_PACK_RELATIVE_RELOCS}>,"
+            "$<BOOL:${HAVE_LIBC_DT_RELR}>,"
+            "$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>>:LINKER:-z,pack-relative-relocs>",
             body,
         )
-        self.assertNotIn("$<$<BOOL:${HAVE_C_FHARDENED}>:-fhardened>", body)
-        self.assertIn(
-            "$<$<AND:$<BOOL:${HAVE_C_WHARDENED}>,"
-            "$<NOT:$<BOOL:${HAVE_INSTRUMENTED_SANITIZER}>>>:-Whardened>",
+        self.assertNotIn(
+            "$<$<BOOL:${HAVE_LINK_Z_PACK_RELATIVE_RELOCS}>:LINKER:-z,pack-relative-relocs>",
             body,
         )
-        # The probe also detects sanitizers set via add_compile_options/add_link_options.
-        self.assertIn("get_directory_property(_hardening_dir_compile_options COMPILE_OPTIONS)", probes)
-        self.assertIn("-fsanitize", probes)
+        # The libc probe is a preprocessor features.h check (valid under cross too).
+        self.assertIn(
+            'check_c_source_compiles("${_hardening_libc_probe_source}" HAVE_LIBC_DT_RELR)',
+            probes,
+        )
+        self.assertIn("__GLIBC_PREREQ(2, 36)", probes)
+        self.assertIn("  HAVE_LIBC_DT_RELR\n", probes)  # mark_as_advanced
+        # The result variable must not be pre-set: check_c_source_compiles skips when
+        # the variable is already defined, which would pin the probe to 0.
+        self.assertNotIn("set(HAVE_LIBC_DT_RELR 0)\nset(_hardening_libc_probe_source", probes)
+        self.assertNotIn("set(HAVE_LIBC_DT_RELR 0)\nif(UNIX", probes)
+        # check_linker_flag's "ignored" FAIL_REGEX is built from the literal LINKER:
+        # token and never matches GNU ld's "-z pack-relative-relocs ignored" (targets
+        # without DT_RELR support, e.g. riscv64/arm), so every -z probe is re-linked
+        # with the bare spelling and demoted on a hit. Non -z options error out hard
+        # and need no guard.
+        self.assertIn("function(_hardening_linker_z_flag_not_ignored flag var)", probes)
+        self.assertIn(
+            'set(_hardening_z_fail_regex "warning: [^\\n]*${_hardening_z_bare_re}[^\\n]* ignored"',
+            probes,
+        )
+        self.assertIn('"warning: unknown -z value: ${_hardening_z_keyword_re}")', probes)
+        self.assertIn('set(${var} 0 CACHE INTERNAL "Test ${var}" FORCE)', probes)
+        self.assertIn(
+            '  check_linker_flag(${_hardening_link_lang} "LINKER:-z,pack-relative-relocs" '
+            "HAVE_LINK_Z_PACK_RELATIVE_RELOCS)\n",
+            probes,
+        )
+        self.assertIn(
+            '  _hardening_linker_z_flag_not_ignored("LINKER:-z,pack-relative-relocs" '
+            "HAVE_LINK_Z_PACK_RELATIVE_RELOCS)\n",
+            probes,
+        )
+        self.assertIn(
+            '  _hardening_linker_z_flag_not_ignored("LINKER:-z,nodlopen" HAVE_LINK_Z_NODLOPEN)\n',
+            probes,
+        )
+        self.assertNotIn('_hardening_linker_z_flag_not_ignored("LINKER:--gc-sections"', probes)
+        self.assertNotIn('_hardening_linker_z_flag_not_ignored("LINKER:--as-needed"', probes)
+        # The guard runs after every check_linker_flag so a demotion is never re-probed.
+        self.assertLess(
+            probes.index(
+                'check_linker_flag(${_hardening_link_lang} "LINKER:-z,pack-relative-relocs"'
+            ),
+            probes.index('_hardening_linker_z_flag_not_ignored("LINKER:-z,nodlopen"'),
+        )
+        # --gc-sections pairs with -ffunction/-fdata-sections but stays probe-only
+        # (firmware dials it out via by_compile_db.remove; no host-only gate).
+        self.assertIn(
+            "$<$<BOOL:${HAVE_LINK_GC_SECTIONS}>:LINKER:--gc-sections>",
+            body,
+        )
+        self.assertIn(
+            'check_linker_flag(${_hardening_link_lang} "LINKER:-z,pack-relative-relocs" '
+            "HAVE_LINK_Z_PACK_RELATIVE_RELOCS)",
+            probes,
+        )
+        self.assertIn(
+            'check_linker_flag(${_hardening_link_lang} "LINKER:--gc-sections" '
+            "HAVE_LINK_GC_SECTIONS)",
+            probes,
+        )
+
+    def test_generate_hardening_cross_opt_in_drops_native_term_only(self) -> None:
+        """policy.overrides.openssf-hardening.cross lifts the host-only term for the
+        listed flag while keeping the linker and sysroot libc probes; the cross
+        opt-in never widens to flags that are not host-only."""
+        from hardening_verify import generate_hardening_cmake, load_hardening_manifest
+        from policy_overrides import normalize_openssf_cross_opt_in
+
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            manifest = load_hardening_manifest(LINT_KIT)
+            body = generate_hardening_cmake(
+                manifest,
+                repo_root=license_root,
+                cross_opt_in=("LINKER:-z,pack-relative-relocs",),
+            )
+        self.assertIn(
+            "$<$<AND:$<BOOL:${HAVE_LINK_Z_PACK_RELATIVE_RELOCS}>,"
+            "$<BOOL:${HAVE_LIBC_DT_RELR}>>:LINKER:-z,pack-relative-relocs>",
+            body,
+        )
+        self.assertNotIn(
+            "$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>>:LINKER:-z,pack-relative-relocs>",
+            body,
+        )
+        # Other host/-z link flags keep their own gating untouched.
+        self.assertIn("$<$<BOOL:${HAVE_LINK_GC_SECTIONS}>:LINKER:--gc-sections>", body)
+
+        accepted, issues = normalize_openssf_cross_opt_in(
+            ["LINKER:-z,pack-relative-relocs", "LINKER:--gc-sections"]
+        )
+        self.assertEqual(accepted, frozenset({"LINKER:-z,pack-relative-relocs"}))
+        self.assertEqual(len(issues), 1)
+        self.assertIn("LINKER:--gc-sections", issues[0])
+        self.assertIn("not a host-only OpenSSF flag", issues[0])
+        self.assertEqual(normalize_openssf_cross_opt_in(None), (frozenset(), []))
+
+    def test_generate_hardening_cross_opt_in_lifts_genex_native_term(self) -> None:
+        """The genex-gated dynamic-loader link flags (-pie, -z noexecstack/now/relro)
+        are host-only by default; opting them in for cross drops exactly the
+        CMAKE_CROSSCOMPILING term. -pie keeps its EXECUTABLE TYPE term, flags not
+        listed keep the native gate, and the consumer's regenerated Hardening.cmake
+        passes verify_genex_gating (no "must use upstream gating" false positive)."""
+        from hardening_verify import (
+            generate_hardening_cmake,
+            load_hardening_manifest,
+            verify_genex_gating,
+        )
+
+        manifest = load_hardening_manifest(LINT_KIT)
+        with tempfile.TemporaryDirectory() as tmp:
+            license_root = Path(tmp)
+            write_license_only_manifest(license_root)
+            partial = generate_hardening_cmake(
+                manifest,
+                repo_root=license_root,
+                cross_opt_in=("LINKER:-z,now", "-pie"),
+            )
+        self.assertIn('\n    "LINKER:-z,now"\n', partial)
+        self.assertIn("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:-pie>", partial)
+        self.assertNotIn("$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>:LINKER:-z,now>", partial)
+        self.assertNotIn(
+            "$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,"
+            "$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>>:-pie>",
+            partial,
+        )
+        # Not opted in: relro / noexecstack stay native-only.
+        self.assertIn("$<$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>:LINKER:-z,relro>", partial)
+        self.assertIn("$<$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>:LINKER:-z,noexecstack>", partial)
+        # -shared keeps its TYPE-only gate regardless.
+        self.assertIn(
+            "$<$<OR:$<STREQUAL:$<TARGET_PROPERTY:TYPE>,SHARED_LIBRARY>,"
+            "$<STREQUAL:$<TARGET_PROPERTY:TYPE>,MODULE_LIBRARY>>:-shared>",
+            partial,
+        )
+
+        # Full opt-in as a consumer manifest: regenerate and re-verify the genex gating.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_policy_test_manifest(root)
+            manifest_path = root / ".github/lint-c-cpp.yaml"
+            data = __import__("yaml").safe_load(manifest_path.read_text(encoding="utf-8"))
+            data["policy"]["overrides"]["openssf-hardening"]["cross"] = [
+                "-pie",
+                "LINKER:-z,noexecstack",
+                "LINKER:-z,now",
+                "LINKER:-z,pack-relative-relocs",
+                "LINKER:-z,relro",
+            ]
+            manifest_path.write_text(__import__("yaml").safe_dump(data), encoding="utf-8")
+            cmake_dir = root / "cmake"
+            cmake_dir.mkdir(parents=True, exist_ok=True)
+            body = generate_hardening_cmake(
+                manifest,
+                repo_root=root,
+                cross_opt_in=tuple(data["policy"]["overrides"]["openssf-hardening"]["cross"]),
+            )
+            (cmake_dir / "Hardening.cmake").write_text(body, encoding="utf-8")
+            self.assertIn('\n    "LINKER:-z,noexecstack"\n', body)
+            self.assertIn('\n    "LINKER:-z,now"\n', body)
+            self.assertIn('\n    "LINKER:-z,relro"\n', body)
+            self.assertIn("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:-pie>", body)
+            self.assertIn(
+                "$<$<AND:$<BOOL:${HAVE_LINK_Z_PACK_RELATIVE_RELOCS}>,"
+                "$<BOOL:${HAVE_LIBC_DT_RELR}>>:LINKER:-z,pack-relative-relocs>",
+                body,
+            )
+            # Compile-side host-only gating is untouched by the link opt-in.
+            self.assertIn(
+                "$<$<AND:$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>,${_hardening_speed_cfg}>:-O2>",
+                body,
+            )
+            self.assertEqual(verify_genex_gating(root, manifest), [])
+
+            # Without the opt-in the same ungated body is rejected.
+            data["policy"]["overrides"]["openssf-hardening"]["cross"] = None
+            manifest_path.write_text(__import__("yaml").safe_dump(data), encoding="utf-8")
+            issues = verify_genex_gating(root, manifest)
+            self.assertTrue(
+                any("-pie must use upstream CMake generator gating" in item for item in issues),
+                issues,
+            )
+            self.assertTrue(
+                any(
+                    "LINKER:-z,now must use upstream CMake generator gating" in item
+                    for item in issues
+                ),
+                issues,
+            )
 
     def test_usable_openssf_probe_cache_ignores_unrelated_cmakecache(self) -> None:
         """Caches without OpenSSF HAVE_* keys do not fail-closed probe-gated audit."""
         from hardening_verify import (
+            _usable_openssf_probe_cache,
             compile_db_audit_flags_for_context,
             load_hardening_manifest,
-            _usable_openssf_probe_cache,
         )
 
         kit_manifest = load_hardening_manifest(LINT_KIT)
@@ -2557,11 +3023,11 @@ class LintStepCoverage(unittest.TestCase):
         """Hand-edited Hardening.cmake is overwritten; lint asks to commit and re-run."""
         from format_fail_on_change import FAIL_ON_CHANGE_TAIL
         from hardening_verify import (
+            _normalize_generated_cmake,
             generate_hardening_cmake,
             generate_probes_cmake,
             load_hardening_manifest,
             sync_kit_cmake_regen,
-            _normalize_generated_cmake,
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2596,9 +3062,7 @@ class LintStepCoverage(unittest.TestCase):
                 expected.replace("-Wall", "-Wextra"), encoding="utf-8"
             )
             (root / "cmake" / "CompilerHardeningProbes.cmake").write_text(
-                _normalize_generated_cmake(
-                    generate_probes_cmake(kit_manifest, repo_root=root)
-                ),
+                _normalize_generated_cmake(generate_probes_cmake(kit_manifest, repo_root=root)),
                 encoding="utf-8",
             )
             issues = sync_kit_cmake_regen(root, kit, kit_manifest)
@@ -2613,12 +3077,138 @@ class LintStepCoverage(unittest.TestCase):
             # Second pass is clean.
             self.assertEqual(sync_kit_cmake_regen(root, kit, kit_manifest), [])
 
-    def test_kit_generated_cmake_matches_shipped_templates(self) -> None:
+    def test_sync_kit_cmake_regen_applies_openssf_cross_opt_in(self) -> None:
+        """The ``cross`` dial is part of the expected Hardening.cmake: a consumer that
+        opts DT_RELR in for cross builds gets the native term dropped (and the
+        dial note), and a stale FULL copy is rewritten fail-on-change."""
+        from format_fail_on_change import FAIL_ON_CHANGE_TAIL
         from hardening_verify import (
+            _normalize_generated_cmake,
             generate_hardening_cmake,
             generate_probes_cmake,
             load_hardening_manifest,
+            sync_kit_cmake_regen,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit = root / "kit"
+            (root / "cmake").mkdir(parents=True)
+            (root / "userspace").mkdir()
+            shutil.copytree(LINT_KIT / "config", kit / "config")
+            (kit / "cmake").mkdir(parents=True)
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "license_header: |\n  # test\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
+                "  source_roots: [userspace]\n"
+                "compile_db:\n  firmware: []\n  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML.replace(
+                    "openssf-hardening: {add: null, remove: null, by_compile_db: null}",
+                    "openssf-hardening: {add: null, remove: null, by_compile_db: null, "
+                    "cross: ['LINKER:-z,pack-relative-relocs']}",
+                )
+                + "firmware_build: null\n"
+                "spec_traceability: null\n"
+                "toolchain: null\n"
+                "workflow: null\n"
+                "yamllint: null\n",
+            )
+            kit_manifest = load_hardening_manifest(kit)
+            full = _normalize_generated_cmake(
+                generate_hardening_cmake(kit_manifest, repo_root=root)
+            )
+            (root / "cmake" / "Hardening.cmake").write_text(full, encoding="utf-8")
+            (root / "cmake" / "CompilerHardeningProbes.cmake").write_text(
+                _normalize_generated_cmake(generate_probes_cmake(kit_manifest, repo_root=root)),
+                encoding="utf-8",
+            )
+            issues = sync_kit_cmake_regen(root, kit, kit_manifest)
+            self.assertTrue(issues, issues)
+            self.assertTrue(all(FAIL_ON_CHANGE_TAIL in item for item in issues), issues)
+            rewritten = (root / "cmake" / "Hardening.cmake").read_text(encoding="utf-8")
+            self.assertIn(
+                "$<$<AND:$<BOOL:${HAVE_LINK_Z_PACK_RELATIVE_RELOCS}>,"
+                "$<BOOL:${HAVE_LIBC_DT_RELR}>>:LINKER:-z,pack-relative-relocs>",
+                rewritten,
+            )
+            self.assertNotIn(
+                "$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>>:LINKER:-z,pack-relative-relocs>",
+                rewritten,
+            )
+            self.assertIn("global policy.overrides.openssf-hardening", rewritten)
+            # Probes module is dial-independent and must be left alone.
+            self.assertEqual([item for item in issues if "CompilerHardeningProbes" in item], [])
+            self.assertEqual(sync_kit_cmake_regen(root, kit, kit_manifest), [])
+
+    def test_write_generated_hardening_cmake_reads_cross_from_consumer_manifest(
+        self,
+    ) -> None:
+        """Default write_generated_hardening_cmake() (cross_opt_in=None) must
+        pick up policy.overrides.openssf-hardening.cross from the consumer
+        manifest. Passing an empty iterable must not."""
+        from hardening_verify import (
+            generate_hardening_cmake,
+            load_hardening_manifest,
+            write_generated_hardening_cmake,
+        )
+
+        lifted = (
+            "$<$<AND:$<BOOL:${HAVE_LINK_Z_PACK_RELATIVE_RELOCS}>,"
+            "$<BOOL:${HAVE_LIBC_DT_RELR}>>:LINKER:-z,pack-relative-relocs>"
+        )
+        native_term = "$<NOT:$<BOOL:${CMAKE_CROSSCOMPILING}>>>:LINKER:-z,pack-relative-relocs>"
+        manifest_yaml = (
+            "license_header: |\n  # test\n"
+            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+            "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
+            "  source_roots: [userspace]\n"
+            "compile_db:\n  firmware: []\n  userspace:\n"
+            "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+            "      source: userspace\n"
+            "policy:\n  constants_headers: [limits.h]\n"
+            + _NULL_OVERRIDES_YAML.replace(
+                "openssf-hardening: {add: null, remove: null, by_compile_db: null}",
+                "openssf-hardening: {add: null, remove: null, by_compile_db: null, "
+                "cross: ['LINKER:-z,pack-relative-relocs']}",
+            )
+            + "firmware_build: null\n"
+            "spec_traceability: null\n"
+            "toolchain: null\n"
+            "workflow: null\n"
+            "yamllint: null\n"
+        )
+        kit_manifest = load_hardening_manifest(LINT_KIT)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root / ".github/lint-c-cpp.yaml", manifest_yaml)
+            default_path = root / "cmake" / "Hardening.default.cmake"
+            write_generated_hardening_cmake(default_path, kit_manifest, repo_root=root)
+            default_body = default_path.read_text(encoding="utf-8")
+            self.assertIn(lifted, default_body)
+            self.assertNotIn(native_term, default_body)
+
+            empty_path = root / "cmake" / "Hardening.empty.cmake"
+            write_generated_hardening_cmake(
+                empty_path, kit_manifest, repo_root=root, cross_opt_in=()
+            )
+            empty_body = empty_path.read_text(encoding="utf-8")
+            self.assertIn(native_term, empty_body)
+            self.assertEqual(
+                empty_body,
+                generate_hardening_cmake(kit_manifest, repo_root=root),
+            )
+
+    def test_kit_generated_cmake_matches_shipped_templates(self) -> None:
+        from hardening_verify import (
             _normalize_generated_cmake,
+            generate_hardening_cmake,
+            generate_probes_cmake,
+            load_hardening_manifest,
         )
 
         manifest = load_hardening_manifest(LINT_KIT)
@@ -2627,9 +3217,7 @@ class LintStepCoverage(unittest.TestCase):
             # Shipped kit templates use the full Apache license_header corpus.
             write_license_only_manifest(license_root)
             bodies = {
-                "Hardening.cmake": generate_hardening_cmake(
-                    manifest, repo_root=license_root
-                ),
+                "Hardening.cmake": generate_hardening_cmake(manifest, repo_root=license_root),
                 "CompilerHardeningProbes.cmake": generate_probes_cmake(
                     manifest, repo_root=license_root
                 ),
@@ -2656,8 +3244,7 @@ class LintStepCoverage(unittest.TestCase):
                 "compile_db:\n  firmware: []\n  userspace:\n"
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
                 "      source: userspace\n"
-                "policy:\n  constants_headers: [limits.h]\n"
-                + _NULL_OVERRIDES_YAML,
+                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML,
             )
             build = root / "build/lint/userspace"
             build.mkdir(parents=True)
@@ -2670,6 +3257,255 @@ class LintStepCoverage(unittest.TestCase):
             kit_manifest = load_hardening_manifest(LINT_KIT)
             issues = verify_userspace_link_txt_openssf(root, LINT_KIT, kit_manifest)
         self.assertTrue(any("LINKER:-z,relro" in item for item in issues), issues)
+
+    def test_compile_option_not_in_effect_applies_last_option_wins(self) -> None:
+        from hardening_verify import (
+            OPTION_MISSING,
+            compile_entry_tokens,
+            compile_option_not_in_effect,
+        )
+
+        def reason(flag: str, command: str) -> str | None:
+            return compile_option_not_in_effect(
+                flag, compile_entry_tokens({"command": f"cc {command} -c a.c"})
+            )
+
+        cases: list[tuple[str, str, str | None]] = [
+            ("-fstack-protector-strong", "-fstack-protector-strong", None),
+            (
+                "-fstack-protector-strong",
+                "-fstack-protector-strong -fno-stack-protector",
+                "-fno-stack-protector",
+            ),
+            (
+                "-fstack-protector-strong",
+                "-fstack-protector-strong -fstack-protector",
+                "-fstack-protector",
+            ),
+            ("-fstack-protector-strong", "-fstack-protector-all", None),
+            ("-D_FORTIFY_SOURCE=3", "-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3", None),
+            ("-D_FORTIFY_SOURCE=3", "-D_FORTIFY_SOURCE=3 -U_FORTIFY_SOURCE", "-U_FORTIFY_SOURCE"),
+            (
+                "-D_FORTIFY_SOURCE=3",
+                "-D_FORTIFY_SOURCE=3 -Wp,-D_FORTIFY_SOURCE=2",
+                "-D_FORTIFY_SOURCE=2",
+            ),
+            ("-U_FORTIFY_SOURCE", "-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3", None),
+            ("-D_GLIBCXX_ASSERTIONS", "-D _GLIBCXX_ASSERTIONS", None),
+            (
+                "-D_GLIBCXX_ASSERTIONS",
+                "-D_GLIBCXX_ASSERTIONS -U_GLIBCXX_ASSERTIONS",
+                "-U_GLIBCXX_ASSERTIONS",
+            ),
+            ("-O2", "-O3 -O2", None),
+            ("-O2", "-O2 -O3", None),
+            ("-O2", "-O2 -O0", "-O0"),
+            ("-O2", "-Os", "-Os"),
+            ("-fno-strict-aliasing", "-fno-strict-aliasing -fstrict-aliasing", "-fstrict-aliasing"),
+            (
+                "-fcf-protection=full",
+                "-fcf-protection=full -fcf-protection=none",
+                "-fcf-protection=none",
+            ),
+            (
+                "-fzero-init-padding-bits=all",
+                "-fzero-init-padding-bits=all -fzero-init-padding-bits=unions",
+                "-fzero-init-padding-bits=unions",
+            ),
+            ("-fzero-call-used-regs=used-gpr", "-fzero-call-used-regs=all", None),
+            ("-Werror", "-Werror=vla", OPTION_MISSING),
+            ("-Werror", "-Werror -Wno-error", "-Wno-error"),
+            ("-Wformat=2", "-Wformat -Wformat=2", None),
+            ("-Wformat=2", "-Wformat=2 -Wformat", "-Wformat"),
+            ("-Wformat", "-Wformat -Wformat=2", None),
+            ("-Wformat", "-Wformat=2 -Wformat-security", None),
+            (
+                "-Werror=format-security",
+                "-Wformat -Werror=format-security -Wno-format",
+                "-Wno-format",
+            ),
+            (
+                "-Werror=format-security",
+                "-Werror=format-security -Wno-error=format-security",
+                "-Wno-error=format-security",
+            ),
+            (
+                "-Werror=implicit",
+                "-Werror=implicit -Wno-error=implicit-function-declaration",
+                "-Wno-error=implicit-function-declaration",
+            ),
+            ("-Werror=vla", "-Werror=vla -Wvla-larger-than=100", None),
+            ("-Wall", "-Wall -w", "-w"),
+            ("-Wconversion", "-Wsign-conversion", OPTION_MISSING),
+        ]
+        for flag, command, expected in cases:
+            with self.subTest(flag=flag, command=command):
+                self.assertEqual(reason(flag, command), expected)
+        self.assertIsNone(
+            compile_option_not_in_effect(
+                "-D_FORTIFY_SOURCE=3",
+                compile_entry_tokens({"arguments": ["cc", "-D", "_FORTIFY_SOURCE=3", "-c", "a.c"]}),
+            )
+        )
+
+    def test_link_option_not_in_effect_applies_last_option_wins(self) -> None:
+        from hardening_verify import OPTION_MISSING, link_option_not_in_effect, linker_items
+
+        def reason(token: str, command: str) -> str | None:
+            return link_option_not_in_effect(token, linker_items(command.split()))
+
+        cases: list[tuple[str, str, str | None]] = [
+            ("LINKER:-z,relro", "cc -Wl,-z,relro,-z,now -o app a.o", None),
+            ("LINKER:-z,now", "cc -Wl,-z,relro,-z,now -o app a.o", None),
+            ("LINKER:-z,now", "cc -Xlinker -z -Xlinker now -o app a.o", None),
+            ("LINKER:-z,now", "cc -Wl,-znow -o app a.o", None),
+            ("LINKER:-z,now", "cc -Wl,-z,now -Wl,-z,lazy -o app a.o", "LINKER:-z,lazy"),
+            (
+                "LINKER:-z,noexecstack",
+                "cc -Wl,-z,noexecstack -Wl,-z,execstack -o app a.o",
+                "LINKER:-z,execstack",
+            ),
+            ("LINKER:-z,relro", "cc -Wl,-z,norelro -o app a.o", "LINKER:-z,norelro"),
+            ("-pie", "cc -no-pie -o app a.o", "-no-pie"),
+            ("-pie", "cc -pie -o app a.o", None),
+            ("-pie", "cc -o app a.o", OPTION_MISSING),
+            (
+                "LINKER:--as-needed",
+                "cc -Wl,--as-needed -Wl,--push-state,--no-as-needed -lfoo -Wl,--pop-state -o app",
+                None,
+            ),
+            (
+                "LINKER:--as-needed",
+                "cc -Wl,--as-needed -Wl,--no-as-needed -lfoo -o app",
+                "LINKER:--no-as-needed",
+            ),
+            ("LINKER:-z,nodlopen", "cc -Wl,-z,nodlopen -o app a.o", None),
+            ("LINKER:-z,nodlopen", "cc -o app a.o", OPTION_MISSING),
+        ]
+        for token, command, expected in cases:
+            with self.subTest(token=token, command=command):
+                self.assertEqual(reason(token, command), expected)
+
+    def test_compile_db_openssf_audit_rejects_later_overriding_options(self) -> None:
+        from hardening_verify import verify_compile_commands_openssf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_canonical_lint_manifest(root)
+            (root / "core").mkdir()
+            host = root / "core/host.c"
+            host.write_text("void host(void) {}\n", encoding="utf-8")
+            hardened = (
+                "-Wall -Wextra -Wformat -Wformat=2 -Wconversion -Wsign-conversion "
+                "-Wimplicit-fallthrough -Werror -Werror=format-security "
+                "-fno-delete-null-pointer-checks -fno-strict-overflow -fno-strict-aliasing "
+                "-fstack-protector-strong -fcf-protection=full -fexceptions"
+            )
+
+            def audit(extra: str) -> list[str]:
+                entries = {
+                    "core/host.c": {
+                        "directory": str(root),
+                        "command": f"/usr/bin/cc {hardened} {extra} -c {host.resolve()}",
+                        "file": str(host.resolve()),
+                    }
+                }
+                return verify_compile_commands_openssf(
+                    root, LINT_KIT, entries_by_key=entries, source_paths=[host]
+                )
+
+            self.assertEqual(audit(""), [])
+            issues = audit("-fno-stack-protector -Wno-error")
+        self.assertTrue(
+            any(
+                "overridden" in item
+                and "-fstack-protector-strong by -fno-stack-protector" in item
+                and "-Werror by -Wno-error" in item
+                for item in issues
+            ),
+            issues,
+        )
+
+    def test_userspace_link_audit_checks_each_link_command(self) -> None:
+        from hardening_verify import (
+            _required_flag_names,
+            load_hardening_manifest,
+            verify_userspace_link_txt_openssf,
+        )
+
+        kit_manifest = load_hardening_manifest(LINT_KIT)
+        link_flags = " ".join(
+            f"-Wl,{token[len('LINKER:') :]}" if token.startswith("LINKER:") else token
+            for token in sorted(_required_flag_names(kit_manifest))
+            if token.startswith("LINKER:") or token == "-pie"
+        )
+
+        def project(root: Path) -> Path:
+            write(
+                root / ".github/lint-c-cpp.yaml",
+                "license_header: |\n  # test\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n  exclude_gitignore: true\n"
+                "  source_roots: [userspace]\n"
+                "compile_db:\n  firmware: []\n  userspace:\n"
+                "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
+                "      source: userspace\n"
+                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML,
+            )
+            build = root / "build/lint/userspace"
+            build.mkdir(parents=True)
+            (build / "CMakeCache.txt").write_text(
+                "CMAKE_BUILD_TYPE:STRING=Release\n", encoding="utf-8"
+            )
+            return build
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build = project(root)
+            for name, text in {
+                "app": f"cc {link_flags} a.o -o app\n",
+                "lazy": f"cc {link_flags} -Wl,-z,lazy a.o -o lazy\n",
+                "lib": "ar qc liblib.a b.o\nranlib liblib.a\n",
+            }.items():
+                link = build / f"CMakeFiles/{name}.dir/link.txt"
+                link.parent.mkdir(parents=True)
+                link.write_text(text, encoding="utf-8")
+            make_issues = verify_userspace_link_txt_openssf(root, LINT_KIT, kit_manifest)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build = project(root)
+            (build / "CMakeFiles").mkdir()
+            (build / "CMakeFiles/rules.ninja").write_text(
+                "rule C_EXECUTABLE_LINKER__app_Release\n"
+                "  command = $PRE_LINK && cc $FLAGS $LINK_FLAGS $in -o $TARGET_FILE"
+                " && $POST_BUILD\n"
+                "rule C_SHARED_LIBRARY_LINKER__sh_Release\n"
+                "  command = $PRE_LINK && cc -fPIC $LINK_FLAGS -shared -o $TARGET_FILE $in"
+                " && $POST_BUILD\n",
+                encoding="utf-8",
+            )
+            (build / "build.ninja").write_text(
+                "include CMakeFiles/rules.ninja\n"
+                "build app: C_EXECUTABLE_LINKER__app_Release a.o\n"
+                f"  LINK_FLAGS = {link_flags}\n"
+                "  TARGET_FILE = app\n"
+                "build bare: C_EXECUTABLE_LINKER__app_Release b.o\n"
+                "  LINK_FLAGS = -Wl,-z,relro\n"
+                "  TARGET_FILE = bare\n"
+                "build libsh.so: C_SHARED_LIBRARY_LINKER__sh_Release c.o\n"
+                f"  LINK_FLAGS = {link_flags.replace('-pie', '')}\n"
+                "  TARGET_FILE = libsh.so\n",
+                encoding="utf-8",
+            )
+            ninja_issues = verify_userspace_link_txt_openssf(root, LINT_KIT, kit_manifest)
+
+        self.assertEqual(len(make_issues), 1, make_issues)
+        self.assertIn("lazy.dir/link.txt", make_issues[0])
+        self.assertIn("LINKER:-z,now by LINKER:-z,lazy", make_issues[0])
+        self.assertEqual(len(ninja_issues), 1, ninja_issues)
+        self.assertIn("build.ninja (bare)", ninja_issues[0])
+        self.assertIn("-pie", ninja_issues[0])
 
     def test_openssf_prose_tokens_are_dialable_in_coverage_flags(self) -> None:
         from hardening_verify import OPENSSF_PROSE_FLAGS, load_hardening_manifest
@@ -2692,10 +3528,12 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n"
                 "  firmware_lint_exemptions:\n"
@@ -2710,11 +3548,15 @@ class LintStepCoverage(unittest.TestCase):
                 "      source: core\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("removed policy fields: firmware_lint_exemptions", result.stderr)
@@ -2736,10 +3578,12 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  // test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [firmware]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n"
                 "compile_db:\n"
@@ -2771,10 +3615,12 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [firmware]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n"
                 "  firmware_lint_exemptions:\n"
@@ -2792,11 +3638,15 @@ class LintStepCoverage(unittest.TestCase):
                 "      source: core\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("removed policy fields: firmware_lint_exemptions", result.stderr)
@@ -2807,10 +3657,12 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n"
                 "  firmware_lint_exemptions:\n"
@@ -2824,11 +3676,15 @@ class LintStepCoverage(unittest.TestCase):
                 "      source: core\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("removed policy fields: firmware_lint_exemptions", result.stderr)
@@ -2839,17 +3695,23 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api: {}\n",
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api: {}\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("policy.unsafe_api.header must be a non-empty string", result.stderr)
@@ -2860,18 +3722,24 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("policy.unsafe_api.wrapper_files", result.stderr)
@@ -2892,11 +3760,15 @@ class LintStepCoverage(unittest.TestCase):
             self.assertEqual(enabled_lint_jobs_ordered(root), KNOWN_LINT_JOBS_ORDERED)
             self.assertTrue(lint_job_enabled(root, "license"))
             ok = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
             self.assertEqual(ok.returncode, 0, ok.stderr)
 
@@ -2927,11 +3799,15 @@ class LintStepCoverage(unittest.TestCase):
             empty["enabled_lint_jobs"] = []
             path.write_text(yaml.safe_dump(empty, sort_keys=False), encoding="utf-8")
             bad_empty = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
             self.assertEqual(bad_empty.returncode, 1)
             self.assertIn("enabled_lint_jobs must be non-empty", bad_empty.stderr)
@@ -2940,11 +3816,15 @@ class LintStepCoverage(unittest.TestCase):
             unknown["enabled_lint_jobs"] = ["license", "not_a_real_job"]
             path.write_text(yaml.safe_dump(unknown, sort_keys=False), encoding="utf-8")
             bad_unknown = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
             self.assertEqual(bad_unknown.returncode, 1)
             self.assertIn("unknown job 'not_a_real_job'", bad_unknown.stderr)
@@ -2953,11 +3833,15 @@ class LintStepCoverage(unittest.TestCase):
             dup["enabled_lint_jobs"] = ["license", "license"]
             path.write_text(yaml.safe_dump(dup, sort_keys=False), encoding="utf-8")
             bad_dup = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
             self.assertEqual(bad_dup.returncode, 1)
             self.assertIn("duplicate job 'license'", bad_dup.stderr)
@@ -2968,22 +3852,28 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
                 "analysis:\n  compile_db: []\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  canonical:\n    null_header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  canonical:\n    null_header: sample_null.h\n"
                 "    null_include_headers: [attrs.h]\n"
                 "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("unknown top-level fields: analysis", result.stderr)
@@ -2994,10 +3884,12 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  bounds:\n    shared_header_basenames: [limits.h]\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  bounds:\n    shared_header_basenames: [limits.h]\n"
                 "  canonical:\n    null_header: sample_null.h\n"
                 "    null_include_headers: [attrs.h]\n"
                 "    index_skip_stems: [mem_util]\n"
@@ -3006,11 +3898,15 @@ class LintStepCoverage(unittest.TestCase):
                 "    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("unknown policy fields: canonical", result.stderr)
@@ -3026,17 +3922,22 @@ class LintStepCoverage(unittest.TestCase):
                 "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
                 "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("unknown top-level fields: c_prefixes", result.stderr)
@@ -3050,17 +3951,22 @@ class LintStepCoverage(unittest.TestCase):
                 "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
                 "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  null_macro:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  null_macro:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "  unsafe_api_policy:\n    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("unknown policy fields: null_macro", result.stderr)
@@ -3079,17 +3985,22 @@ class LintStepCoverage(unittest.TestCase):
                 "  - name: firmware compile\n"
                 "    commands:\n"
                 "      - make lint-firmware\n"
-                "policy:\n  constants_headers: [limits.h]\n" + _NULL_OVERRIDES_YAML +
-                "  unsafe_api:\n    header: sample_null.h\n"
+                "policy:\n  constants_headers: [limits.h]\n"
+                + _NULL_OVERRIDES_YAML
+                + "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
                 "    wrapper_files: [include/sample/sample_null.h]\n",
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("unknown top-level fields: build", result.stderr)
@@ -3100,8 +4011,7 @@ class LintStepCoverage(unittest.TestCase):
             cwd=REPO_ROOT,
             check=False,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         self.assertEqual(
             tool_check.returncode,
@@ -3124,8 +4034,7 @@ class LintStepCoverage(unittest.TestCase):
                 env=env,
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(
             result.returncode,
@@ -3174,10 +4083,13 @@ class LintStepCoverage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bootstrap_scan_manifest(root, source_roots=("core",))
-            with patch("git_ignore.git_repo_available", return_value=True), patch(
-                "git_ignore.paths_gitignored",
-                side_effect=lambda _repo, rels: frozenset(
-                    path for path in rels if path == "core/cache.c"
+            with (
+                patch("git_ignore.git_repo_available", return_value=True),
+                patch(
+                    "git_ignore.paths_gitignored",
+                    side_effect=lambda _repo, rels: frozenset(
+                        path for path in rels if path == "core/cache.c"
+                    ),
                 ),
             ):
                 self.assertTrue(path_in_scan_scope("core/app.c", root))
@@ -3213,7 +4125,7 @@ class LintStepCoverage(unittest.TestCase):
             )
 
     def test_markdown_scan_finds_docs_outside_source_roots(self) -> None:
-        from scan_policy import iter_job_paths, JOB_MARKDOWN
+        from scan_policy import JOB_MARKDOWN, iter_job_paths
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3230,7 +4142,7 @@ class LintStepCoverage(unittest.TestCase):
         self.assertEqual(paths, {"README.md", "docs/TUTORIAL.md", "core/README.md"})
 
     def test_license_scan_finds_repo_files_outside_source_roots(self) -> None:
-        from scan_policy import iter_job_paths, JOB_LICENSE
+        from scan_policy import JOB_LICENSE, iter_job_paths
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3313,7 +4225,7 @@ class LintStepCoverage(unittest.TestCase):
                     read_paths_file(pf, root)
 
     def test_shell_scan_finds_scripts_outside_source_roots(self) -> None:
-        from scan_policy import iter_job_paths, JOB_SHELL
+        from scan_policy import JOB_SHELL, iter_job_paths
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3377,7 +4289,7 @@ class LintStepCoverage(unittest.TestCase):
                 f"{str(config)!r} README.md; "
                 "ec2=$?; "
                 "set -e; "
-                '[[ $ec -eq 1 && $ec2 -eq 0 ]]'
+                "[[ $ec -eq 1 && $ec2 -eq 0 ]]"
             )
             result = run_checked([bash_executable(), "-c", script], env=env)
         self.assertIn("markdownlint: OK (1 scanned, 0 auto-formatted)", result.stdout)
@@ -3417,7 +4329,8 @@ class LintStepCoverage(unittest.TestCase):
                 fakebin,
                 "clang-format",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 99.0.0'; exit 0; fi\n"
+                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 99.0.0'; exit 0; "
+                "fi\n"
                 "exit 0\n",
             )
             make_fake_executable(fakebin, "scan-build-21", "#!/usr/bin/env bash\nexit 0\n")
@@ -3425,12 +4338,15 @@ class LintStepCoverage(unittest.TestCase):
             script = (
                 f"source {str(TOOLCHAIN_DIR / 'clang_toolchain.sh')!r}; "
                 "tidy=$(lint_kit_find_clang_tidy); [[ $tidy == */clang-tidy ]]; "
-                "runner=$(lint_kit_find_run_clang_tidy \"$tidy\"); [[ $runner == */run-clang-tidy ]]; "
+                'runner=$(lint_kit_find_run_clang_tidy "$tidy"); [[ $runner == */run-clang-tidy '
+                "]]; "
                 "fmt=$(lint_kit_find_clang_format); [[ $fmt == */clang-format ]]; "
                 "scan=$(lint_kit_find_scan_build); [[ $scan == */scan-build-21 ]]; "
-                "lint_kit_clang_tidy_version_ge 21.0.0 \"$(lint_kit_clang_tidy_version_raw \"$tidy\")\"; "
-                "lint_kit_clang_format_version_ge 20.0.0 \"$(lint_kit_clang_format_version_raw \"$fmt\")\"; "
-                "lint_kit_scan_build_version_ge 21.0.0 \"$(lint_kit_scan_build_version_raw \"$scan\")\""
+                'lint_kit_clang_tidy_version_ge 21.0.0 "$(lint_kit_clang_tidy_version_raw '
+                '"$tidy")"; '
+                'lint_kit_clang_format_version_ge 20.0.0 "$(lint_kit_clang_format_version_raw '
+                '"$fmt")"; '
+                'lint_kit_scan_build_version_ge 21.0.0 "$(lint_kit_scan_build_version_raw "$scan")"'
             )
             run_checked(["bash", "-c", script], env=env)
 
@@ -3443,7 +4359,8 @@ class LintStepCoverage(unittest.TestCase):
                 fakebin,
                 "clang-format-21",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 21.0.0'; exit 0; fi\n"
+                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 21.0.0'; exit 0; "
+                "fi\n"
                 "exit 0\n",
             )
             env = {
@@ -3456,10 +4373,10 @@ class LintStepCoverage(unittest.TestCase):
                 f"source {str(TOOLCHAIN_DIR / 'clang_toolchain.sh')!r}; "
                 "lint_kit_ensure_clang_format; "
                 "shim=$(lint_kit_clang_tidy_install_dir); "
-                "fmt=$(lint_kit_find_clang_format); [[ -x \"$fmt\" ]]; "
-                "[[ $(grep -Fx \"$shim\" \"$GITHUB_PATH\" | wc -l) -eq 1 ]]; "
+                'fmt=$(lint_kit_find_clang_format); [[ -x "$fmt" ]]; '
+                '[[ $(grep -Fx "$shim" "$GITHUB_PATH" | wc -l) -eq 1 ]]; '
                 "lint_kit_ensure_clang_format; "
-                "[[ $(grep -Fx \"$shim\" \"$GITHUB_PATH\" | wc -l) -eq 1 ]]"
+                '[[ $(grep -Fx "$shim" "$GITHUB_PATH" | wc -l) -eq 1 ]]'
             )
             run_checked(["bash", "-c", script], env=env)
 
@@ -3478,9 +4395,18 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn("lint_kit_clang_format_fail_on_change", ci_text)
         self.assertIn("lint_kit_shfmt_fail_on_change", ci_text)
         self.assertIn("shellcheck -S warning", ci_text)
-        self.assertIn("format_toolchain.sh", (TOOLCHAIN_DIR / "clang_toolchain.sh").read_text(encoding="utf-8"))
-        self.assertIn("format_toolchain.sh", (TOOLCHAIN_DIR / "markdownlint_toolchain.sh").read_text(encoding="utf-8"))
-        format_section = 'section format "Format C/C++, shell, and Python sources (clang-format, shfmt, shellcheck, codespell, ruff, mypy)"'
+        self.assertIn(
+            "format_toolchain.sh",
+            (TOOLCHAIN_DIR / "clang_toolchain.sh").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "format_toolchain.sh",
+            (TOOLCHAIN_DIR / "markdownlint_toolchain.sh").read_text(encoding="utf-8"),
+        )
+        format_section = (
+            'section format "Format C/C++, shell, and Python sources (clang-format, shfmt, '
+            'shellcheck, codespell, ruff, mypy)"'
+        )
         self.assertIn(format_section, ci_text)
         self.assertNotIn('section "Fix misspellings (codespell)"', ci_text)
         openssf_section = 'section openssf "OpenSSF hardening (validate manifest + hardeninglint)"'
@@ -3496,7 +4422,8 @@ class LintStepCoverage(unittest.TestCase):
             "lint_kit_format_toolchain_self_test",
             "shellcheck -S warning",
             'run bash "${toolchain}/codespell.sh"',
-            'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF audit)"',
+            'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF '
+            'audit)"',
             openssf_section,
             clang_tidy_section,
             memory_section,
@@ -3519,7 +4446,7 @@ class LintStepCoverage(unittest.TestCase):
             'if root == "include"',
             'if root == "esp-idf"',
             'if root in ("include"',
-            '_COMPILE_DB_SKIP_ROOTS',
+            "_COMPILE_DB_SKIP_ROOTS",
             'for root in ("core", "port", "esp-idf/main")',
             '"esp-idf" not in frozenset(scan_source_roots',
             'rel.startswith("tests/")',
@@ -3527,7 +4454,9 @@ class LintStepCoverage(unittest.TestCase):
         for path in production_files:
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden:
-                self.assertNotIn(pattern, text, msg=f"{path}: found hardcoded scan skip {pattern!r}")
+                self.assertNotIn(
+                    pattern, text, msg=f"{path}: found hardcoded scan skip {pattern!r}"
+                )
 
     def test_format_fail_on_change_shared_gates(self) -> None:
         result = run_checked(
@@ -3545,12 +4474,13 @@ class LintStepCoverage(unittest.TestCase):
                 fakebin,
                 "clang-format-21",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 21.0.0'; exit 0; fi\n"
+                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 21.0.0'; exit 0; "
+                "fi\n"
                 "if [[ ${1:-} == '-i' ]]; then\n"
                 "  shift\n"
                 "  while (($# > 0)); do\n"
-                '    if [[ $1 == --style=* ]]; then shift; continue; fi\n'
-                '    if [[ -f $1 ]]; then sed -i \'s/{return/{ return/; s/;}/; }/\' "$1"; fi\n'
+                "    if [[ $1 == --style=* ]]; then shift; continue; fi\n"
+                "    if [[ -f $1 ]]; then sed -i 's/{return/{ return/; s/;}/; }/' \"$1\"; fi\n"
                 "    shift\n"
                 "  done\n"
                 "  exit 0\n"
@@ -3568,12 +4498,12 @@ class LintStepCoverage(unittest.TestCase):
                 "[[ -n $fmt ]]; "
                 f"cd {str(root)!r}; "
                 "set +e; "
-                f"lint_kit_clang_format_fail_on_change 'file:{str(config)}' \"$fmt\" core/sample.c; "
+                f"lint_kit_clang_format_fail_on_change 'file:{config!s}' \"$fmt\" core/sample.c; "
                 "ec=$?; "
-                f"lint_kit_clang_format_fail_on_change 'file:{str(config)}' \"$fmt\" core/sample.c; "
+                f"lint_kit_clang_format_fail_on_change 'file:{config!s}' \"$fmt\" core/sample.c; "
                 "ec2=$?; "
                 "set -e; "
-                '[[ $ec -eq 1 && $ec2 -eq 0 ]]'
+                "[[ $ec -eq 1 && $ec2 -eq 0 ]]"
             )
             result = run_checked([bash_executable(), "-c", script], env=env)
         self.assertIn("clang-format: OK (1 scanned, 0 auto-formatted)", result.stdout)
@@ -3596,8 +4526,7 @@ class LintStepCoverage(unittest.TestCase):
                 env=env,
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("cppcheck 1.0.0 < required", result.stderr)
@@ -3631,7 +4560,10 @@ class LintStepCoverage(unittest.TestCase):
     def test_custom_lints_only_runs_spec_traceability_before_exit(self) -> None:
         script = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
         self.assertIn("spec_traceability_path", script)
-        format_section = 'section format "Format C/C++, shell, and Python sources (clang-format, shfmt, shellcheck, codespell, ruff, mypy)"'
+        format_section = (
+            'section format "Format C/C++, shell, and Python sources (clang-format, shfmt, '
+            'shellcheck, codespell, ruff, mypy)"'
+        )
         assert_section_order(
             self,
             script,
@@ -3639,33 +4571,38 @@ class LintStepCoverage(unittest.TestCase):
             "lint_kit_format_toolchain_self_test",
             "shellcheck -S warning",
             'run bash "${toolchain}/codespell.sh"',
-            'if ((custom_lints_only == 0)); then',
-            'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF audit)"',
+            "if ((custom_lints_only == 0)); then",
+            'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF '
+            'audit)"',
             'section openssf "OpenSSF hardening (validate manifest + hardeninglint)"',
             'section clang_tidy "Run clang-tidy"',
-            'section banned_cxx_heap "Enforce no C++ new/delete (including unsafe wrappers; complements clang-tidy/cppcheck)"',
+            'section banned_cxx_heap "Enforce no C++ new/delete (including unsafe wrappers; '
+            'complements clang-tidy/cppcheck)"',
             "((custom_lints_only == 1))",
             'section cppcheck "Run cppcheck (config/cppcheck-manifest.yaml)"',
             'section firmware_compile_db "Ensure firmware compile databases (compile_db.firmware)"',
-            'ensure-firmware-compile-db',
+            "ensure-firmware-compile-db",
             'section firmware_build "Build firmware (firmware_build.commands)"',
-            'run-firmware-build',
+            "run-firmware-build",
         )
         self.assertLess(
             script.index('section spec_traceability "Verify spec traceability manifest"'),
             script.index("((custom_lints_only == 1))"),
         )
         self.assertNotIn('section "Run manifest build steps"', script)
-        self.assertIn('section firmware_compile_db "Ensure firmware compile databases (compile_db.firmware)"', script)
+        self.assertIn(
+            'section firmware_compile_db "Ensure firmware compile databases (compile_db.firmware)"',
+            script,
+        )
         self.assertIn("ensure-firmware-compile-db", script)
         self.assertIn("run-firmware-build", script)
         self.assertLess(
             script.index("configure-compile-db"),
-            script.index('ensure-firmware-compile-db'),
+            script.index("ensure-firmware-compile-db"),
         )
         self.assertLess(
-            script.index('ensure-firmware-compile-db'),
-            script.index('run-firmware-build'),
+            script.index("ensure-firmware-compile-db"),
+            script.index("run-firmware-build"),
         )
 
     def test_ci_lint_runs_hardening_manifest_and_linter(self) -> None:
@@ -3691,7 +4628,8 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -3710,7 +4648,8 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n",
             )
             self.assertEqual(compile_db_firmware_build_commands(root), [])
@@ -3724,7 +4663,8 @@ class LintStepCoverage(unittest.TestCase):
             write(
                 root / ".github/lint-c-cpp.yaml",
                 "license_header: |\n  # test\n"
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -3742,7 +4682,8 @@ class LintStepCoverage(unittest.TestCase):
             root = Path(tmp)
             bootstrap_scan_manifest(root, source_roots=("userspace",))
             (root / ".github" / "lint-c-cpp.yaml").write_text(
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [userspace]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -3769,7 +4710,9 @@ class LintStepCoverage(unittest.TestCase):
         cxx_text = (CONFIG_DIR / ".clang-tidy-cxx").read_text(encoding="utf-8")
         shared_text = (CONFIG_DIR / ".clang-tidy-shared-c-cxx").read_text(encoding="utf-8")
         overlays_md = (CONFIG_DIR / "README.md").read_text(encoding="utf-8")
-        self.assertIn("pubs.opengroup.org/onlinepubs/9799919799/functions/V2_chap02.html", overlays_md)
+        self.assertIn(
+            "pubs.opengroup.org/onlinepubs/9799919799/functions/V2_chap02.html", overlays_md
+        )
         self.assertIn("google.github.io/styleguide/cppguide.html", overlays_md)
         self.assertIn("best.openssf.org/Compiler-Hardening-Guides", overlays_md)
         for text in (c_text, cxx_text, shared_text):
@@ -3780,7 +4723,9 @@ class LintStepCoverage(unittest.TestCase):
             self.assertNotIn("-readability-magic-numbers,", text)
             self.assertNotIn("-cppcoreguidelines-avoid-magic-numbers,", text)
             self.assertIn("readability-magic-numbers.IgnoredIntegerValues", text)
-            self.assertNotRegex(text, r"(?m)^\s*- key: readability-identifier-naming\.MacroDefinitionIgnoredRegexp")
+            self.assertNotRegex(
+                text, r"(?m)^\s*- key: readability-identifier-naming\.MacroDefinitionIgnoredRegexp"
+            )
         for check in (
             "cppcoreguidelines-pro-bounds-pointer-arithmetic",
             "cppcoreguidelines-pro-bounds-array-to-pointer-decay",
@@ -3899,7 +4844,7 @@ class LintStepCoverage(unittest.TestCase):
             write(root / "userspace/bypass.CXX", "void BypassMain() {}\n")
             merge_dir = root / "build" / "clang-tidy-compile-db"
             source_paths = central_job_paths(root, "source")
-            unsafe_paths = central_job_paths(root, "unsafe_api")
+            central_job_paths(root, "unsafe_api")
             self.assertTrue(
                 helper.merge_compile_commands(
                     root,
@@ -3916,7 +4861,12 @@ class LintStepCoverage(unittest.TestCase):
             )
             overlays = [
                 {"id": "c", "language": "c", "suffixes": [".c"], "config": ".clang-tidy-c"},
-                {"id": "cxx", "language": "cxx", "suffixes": [".cpp", ".cc", ".cxx"], "config": ".clang-tidy-cxx"},
+                {
+                    "id": "cxx",
+                    "language": "cxx",
+                    "suffixes": [".cpp", ".cc", ".cxx"],
+                    "config": ".clang-tidy-cxx",
+                },
             ]
             c_files = {
                 path.relative_to(root).as_posix()
@@ -3943,6 +4893,7 @@ class LintStepCoverage(unittest.TestCase):
     def test_clang_tidy_batches_support_header_only_projects(self) -> None:
         import io
         from contextlib import redirect_stderr, redirect_stdout
+
         from scan_policy import bootstrap_scan_manifest
 
         helper = load_helper("compile_db/compile_db_lint.py")
@@ -4031,7 +4982,8 @@ class LintStepCoverage(unittest.TestCase):
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core, port, tests, userspace, include, esp-idf]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -4072,7 +5024,8 @@ class LintStepCoverage(unittest.TestCase):
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [apps, custom-fw, tests, userspace]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -4106,7 +5059,8 @@ class LintStepCoverage(unittest.TestCase):
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [custom-fw, tests]\n",
             )
 
@@ -4114,13 +5068,17 @@ class LintStepCoverage(unittest.TestCase):
             self.assertEqual(compile_db_required_compile_command_paths(root), [])
 
     def test_compile_db_cmake_coverage_requires_manifest_entry_per_root(self) -> None:
-        from consumer_manifest import compile_db_cmake_coverage_issues, verify_compile_db_cmake_coverage
+        from consumer_manifest import (
+            compile_db_cmake_coverage_issues,
+            verify_compile_db_cmake_coverage,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [tests, userspace]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -4132,8 +5090,14 @@ class LintStepCoverage(unittest.TestCase):
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
                 "      source: userspace\n",
             )
-            write(root / "tests/CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(t C)\n")
-            write(root / "userspace/CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(u C)\n")
+            write(
+                root / "tests/CMakeLists.txt",
+                "cmake_minimum_required(VERSION 3.20)\nproject(t C)\n",
+            )
+            write(
+                root / "userspace/CMakeLists.txt",
+                "cmake_minimum_required(VERSION 3.20)\nproject(u C)\n",
+            )
             issues = compile_db_cmake_coverage_issues(root)
             self.assertEqual(len(issues), 1)
             self.assertIn("tests", issues[0])
@@ -4141,13 +5105,17 @@ class LintStepCoverage(unittest.TestCase):
 
     def test_compile_db_cmake_coverage_arduino_firmware_adoption_root(self) -> None:
         """firmware/ CMakeLists + out-of-tree build/lint/firmware compile DB (NFC shape)."""
-        from consumer_manifest import compile_db_cmake_coverage_issues, verify_compile_db_cmake_coverage
+        from consumer_manifest import (
+            compile_db_cmake_coverage_issues,
+            verify_compile_db_cmake_coverage,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [firmware, tests, userspace]\n"
                 "policy:\n  shared_c_cxx_source_roots: [firmware]\n"
                 "compile_db:\n"
@@ -4169,8 +5137,14 @@ class LintStepCoverage(unittest.TestCase):
                 "include(../cmake/Hardening.cmake)\n"
                 "define_hardening(TARGET hardening C_STANDARD 17 CXX_STANDARD 17)\n",
             )
-            write(root / "tests/CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(t C)\n")
-            write(root / "userspace/CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(u C)\n")
+            write(
+                root / "tests/CMakeLists.txt",
+                "cmake_minimum_required(VERSION 3.20)\nproject(t C)\n",
+            )
+            write(
+                root / "userspace/CMakeLists.txt",
+                "cmake_minimum_required(VERSION 3.20)\nproject(u C)\n",
+            )
             self.assertEqual(compile_db_cmake_coverage_issues(root), [])
             self.assertEqual(verify_compile_db_cmake_coverage(root), 0)
 
@@ -4195,11 +5169,15 @@ class LintStepCoverage(unittest.TestCase):
                 ),
             )
             result = subprocess.run(
-                [sys.executable, str(CORE_DIR / "manifest" / "manifest_validate.py"), "--repo-root", str(root)],
+                [
+                    sys.executable,
+                    str(CORE_DIR / "manifest" / "manifest_validate.py"),
+                    "--repo-root",
+                    str(root),
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("compile_db.firmware[0].source is required", result.stderr)
@@ -4216,8 +5194,12 @@ class LintStepCoverage(unittest.TestCase):
             write_license_only_manifest(license_root)
             body = generate_hardening_flags_mk(dialed, repo_root=license_root)
         c_line = next(line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CFLAGS"))
-        cxx_line = next(line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CXXFLAGS"))
-        cpp_line = next(line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CPPFLAGS"))
+        cxx_line = next(
+            line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CXXFLAGS")
+        )
+        cpp_line = next(
+            line for line in body.splitlines() if line.startswith("NERO_OPENSSF_CPPFLAGS")
+        )
         c_flags = c_line.split(":=", 1)[1].strip().split()
         cxx_flags = cxx_line.split(":=", 1)[1].strip().split()
         self.assertIn("-Werror=implicit", c_flags)
@@ -4285,7 +5267,10 @@ class LintStepCoverage(unittest.TestCase):
                         [
                             {
                                 "directory": str(root),
-                                "command": f"arm-none-eabi-gcc {host_flags} -c {(root / 'firmware/shared.c').resolve()}",
+                                "command": (
+                                    f"arm-none-eabi-gcc {host_flags} -c "
+                                    f"{(root / 'firmware/shared.c').resolve()}"
+                                ),
                                 "file": str((root / "firmware/shared.c").resolve()),
                             }
                         ]
@@ -4294,18 +5279,20 @@ class LintStepCoverage(unittest.TestCase):
                 )
             entry = {
                 "directory": str(root),
-                "command": f"arm-none-eabi-gcc {host_flags} -c {(root / 'firmware/shared.c').resolve()}",
+                "command": (
+                    f"arm-none-eabi-gcc {host_flags} -c {(root / 'firmware/shared.c').resolve()}"
+                ),
                 "file": str((root / "firmware/shared.c").resolve()),
                 compile_db_util.PROVENANCE_KEY: [arduino_db, nucleo_db],
             }
-            add, remove = openssf_override_dials_for_source(
+            _add, remove = openssf_override_dials_for_source(
                 root,
                 "firmware/shared.c",
                 preferred_compile_db=arduino_db,
                 provenance=[arduino_db, nucleo_db],
             )
             self.assertTrue(remove)
-            self.assertIn("-Werror", remove)
+            self.assertIn("-Werror", remove or ())
             _add2, remove2 = openssf_override_dials_for_source(
                 root,
                 "firmware/shared.c",
@@ -4320,8 +5307,11 @@ class LintStepCoverage(unittest.TestCase):
             def mock_compiler_target(compiler: Path) -> str | None:
                 return "arm-none-eabi" if "arm-none" in compiler.name else "x86_64-host"
 
-            with patch.object(compile_db_util, "host_target_triple", mock_host_triple), patch.object(
-                compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+            with (
+                patch.object(compile_db_util, "host_target_triple", mock_host_triple),
+                patch.object(
+                    compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+                ),
             ):
                 issues = verify_compile_commands_openssf(
                     root,
@@ -4338,7 +5328,8 @@ class LintStepCoverage(unittest.TestCase):
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core]\n"
                 "spec_traceability:\n  manifest: docs/spec-traceability.yaml\n",
             )
@@ -4349,7 +5340,7 @@ class LintStepCoverage(unittest.TestCase):
 
 class PolicyLinterSimulations(unittest.TestCase):
     def test_bounds_constants_flags_placement_stack_and_format_macro_gaps(self) -> None:
-        helper = load_helper("policy/magic_literals.py")
+        load_helper("policy/magic_literals.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -4379,7 +5370,8 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
             write(
                 root / "include/sample/bad_printf.h",
-                "SAMPLE_PRINTF(4, 5)\nbool sample_appendf(char *buf, size_t cap, size_t *off, const char *fmt, ...);\n",
+                "SAMPLE_PRINTF(4, 5)\nbool sample_appendf(char *buf, size_t cap, size_t *off, "
+                "const char *fmt, ...);\n",
             )
             errors = policy_lint("magic_literals.py", root, "source")
             reported = reported_basenames(errors)
@@ -4388,7 +5380,10 @@ class PolicyLinterSimulations(unittest.TestCase):
         self.assertNotIn("good.cpp", reported)
         self.assertNotIn("good_const.cpp", reported)
         self.assertIn("bad_printf.h", reported)
-        self.assertTrue(any("SOLO_ONLY" in error and "move to that .c/.cpp" in error for error in errors), errors)
+        self.assertTrue(
+            any("SOLO_ONLY" in error and "move to that .c/.cpp" in error for error in errors),
+            errors,
+        )
 
     def test_cross_compile_detection_uses_dumpmachine_not_vendor_regex(self) -> None:
         from unittest.mock import patch
@@ -4414,10 +5409,13 @@ class PolicyLinterSimulations(unittest.TestCase):
                     return "x86_64-host"
                 return "brand-new-triple"
 
-            with patch.object(compile_db_util, "host_target_triple", return_value="x86_64-host"), patch.object(
-                compile_db_util,
-                "compiler_target_triple",
-                side_effect=mock_compiler_target,
+            with (
+                patch.object(compile_db_util, "host_target_triple", return_value="x86_64-host"),
+                patch.object(
+                    compile_db_util,
+                    "compiler_target_triple",
+                    side_effect=mock_compiler_target,
+                ),
             ):
                 self.assertFalse(compile_db_util.is_cross_compile_command(host_cmd))
                 self.assertTrue(compile_db_util.is_cross_compile_command(cross_cmd))
@@ -4426,9 +5424,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                     compile_db_util._normalize_target_triple("x86_64-redhat-linux"),
                 )
                 self.assertEqual(
-                    compile_db_util.clang_target_for_command(
-                        "clang --target=arm-none-eabi -c x.c"
-                    ),
+                    compile_db_util.clang_target_for_command("clang --target=arm-none-eabi -c x.c"),
                     "arm-none-eabi",
                 )
 
@@ -4441,7 +5437,9 @@ class PolicyLinterSimulations(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             platform = root / "platform"
-            variant_inc = platform / "variants" / "BOARD" / "includes" / "ra" / "fsp" / "inc" / "api"
+            variant_inc = (
+                platform / "variants" / "BOARD" / "includes" / "ra" / "fsp" / "inc" / "api"
+            )
             variant_inc.mkdir(parents=True)
             (variant_inc / "bsp_api.h").write_text("/* bsp */\n", encoding="utf-8")
             includes_txt = platform / "variants" / "BOARD" / "includes.txt"
@@ -4468,36 +5466,37 @@ class PolicyLinterSimulations(unittest.TestCase):
         """-DNFC_BOARD_FOO=bar.cpp must not be dropped as a source-file arg."""
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
-        import compile_db_lint
         from unittest.mock import patch
+
+        import compile_db_lint
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             src = root / "firmware" / "nfc_hal.cpp"
             src.parent.mkdir(parents=True)
             src.write_text("void x() {}\n", encoding="utf-8")
-            command = (
-                f"arm-none-eabi-g++ -DNFC_BOARD_NFC_HAL_INC=nfc_hal_board.cpp "
-                f"-c {src}"
-            )
-            with patch.object(
-                compile_db_lint, "clang_target_for_command", return_value="arm-none-eabi"
-            ), patch.object(
-                compile_db_lint, "is_cross_compile_command", return_value=True
-            ), patch.object(
-                compile_db_lint,
-                "compile_driver_path",
-                return_value=Path("/usr/bin/arm-none-eabi-g++"),
-            ), patch.object(
-                compile_db_lint, "_cross_toolchain_include_paths", return_value=[]
-            ), patch.object(
-                compile_db_lint,
-                "_compiler_isystem_flags",
-                return_value=["-isystem", "/opt/arm/include"],
-            ), patch.object(
-                compile_db_lint,
-                "_cross_sysroot",
-                return_value=Path("/opt/arm/sysroot"),
+            command = f"arm-none-eabi-g++ -DNFC_BOARD_NFC_HAL_INC=nfc_hal_board.cpp -c {src}"
+            with (
+                patch.object(
+                    compile_db_lint, "clang_target_for_command", return_value="arm-none-eabi"
+                ),
+                patch.object(compile_db_lint, "is_cross_compile_command", return_value=True),
+                patch.object(
+                    compile_db_lint,
+                    "compile_driver_path",
+                    return_value=Path("/usr/bin/arm-none-eabi-g++"),
+                ),
+                patch.object(compile_db_lint, "_cross_toolchain_include_paths", return_value=[]),
+                patch.object(
+                    compile_db_lint,
+                    "_compiler_isystem_flags",
+                    return_value=["-isystem", "/opt/arm/include"],
+                ),
+                patch.object(
+                    compile_db_lint,
+                    "_cross_sysroot",
+                    return_value=Path("/opt/arm/sysroot"),
+                ),
             ):
                 scrubbed = compile_db_lint._scrub_cross_compile_command(
                     command, source_file=str(src)
@@ -4512,8 +5511,9 @@ class PolicyLinterSimulations(unittest.TestCase):
         """Cross scrub must keep compile-DB ``-std=gnu*`` and query isystem with ``-specs=``."""
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
-        import compile_db_lint
         from unittest.mock import patch
+
+        import compile_db_lint
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4526,35 +5526,33 @@ class PolicyLinterSimulations(unittest.TestCase):
             cflags = root / "build" / "toolchain" / "cflags"
             cflags.parent.mkdir(parents=True)
             cflags.write_text(
-                f"-march=rv32imac\n\"-specs={specs}\"\n",
+                f'-march=rv32imac\n"-specs={specs}"\n',
                 encoding="utf-8",
             )
-            command = (
-                f"/opt/riscv/bin/riscv32-esp-elf-gcc @{cflags} -std=gnu23 "
-                f"-c {src}"
-            )
+            command = f"/opt/riscv/bin/riscv32-esp-elf-gcc @{cflags} -std=gnu23 -c {src}"
             captured: dict[str, object] = {}
 
             def _fake_isystem(compiler, *, language, extra_flags=None):
                 captured["extra_flags"] = list(extra_flags or ())
                 return ["-isystem", "/opt/riscv/picolibc/include"]
 
-            with patch.object(
-                compile_db_lint, "clang_target_for_command", return_value="riscv32-esp-elf"
-            ), patch.object(
-                compile_db_lint, "is_cross_compile_command", return_value=True
-            ), patch.object(
-                compile_db_lint,
-                "compile_driver_path",
-                return_value=Path("/opt/riscv/bin/riscv32-esp-elf-gcc"),
-            ), patch.object(
-                compile_db_lint, "_cross_toolchain_include_paths", return_value=[]
-            ), patch.object(
-                compile_db_lint, "_compiler_isystem_flags", side_effect=_fake_isystem
-            ), patch.object(
-                compile_db_lint,
-                "_cross_sysroot",
-                return_value=Path("/opt/riscv/sysroot"),
+            with (
+                patch.object(
+                    compile_db_lint, "clang_target_for_command", return_value="riscv32-esp-elf"
+                ),
+                patch.object(compile_db_lint, "is_cross_compile_command", return_value=True),
+                patch.object(
+                    compile_db_lint,
+                    "compile_driver_path",
+                    return_value=Path("/opt/riscv/bin/riscv32-esp-elf-gcc"),
+                ),
+                patch.object(compile_db_lint, "_cross_toolchain_include_paths", return_value=[]),
+                patch.object(compile_db_lint, "_compiler_isystem_flags", side_effect=_fake_isystem),
+                patch.object(
+                    compile_db_lint,
+                    "_cross_sysroot",
+                    return_value=Path("/opt/riscv/sysroot"),
+                ),
             ):
                 scrubbed = compile_db_lint._scrub_cross_compile_command(
                     command, source_file=str(src)
@@ -4581,12 +5579,9 @@ class PolicyLinterSimulations(unittest.TestCase):
             specs.write_text("*cpp:\n", encoding="utf-8")
             cflags = root / "esp-idf" / "build" / "toolchain" / "cflags"
             cflags.parent.mkdir(parents=True)
-            foreign = (
-                "/opt/foreign-checkout/sample-firmware/"
-                "esp-idf/build/specs/picolibc.specs"
-            )
+            foreign = "/opt/foreign-checkout/sample-firmware/esp-idf/build/specs/picolibc.specs"
             cflags.write_text(
-                f"-march=rv32imac\n\"-specs={foreign}\"\n",
+                f'-march=rv32imac\n"-specs={foreign}"\n',
                 encoding="utf-8",
             )
             expanded = compile_db_lint._expand_at_response_tokens([f"@{cflags}"])
@@ -4598,8 +5593,9 @@ class PolicyLinterSimulations(unittest.TestCase):
         """Unusable ``-specs=`` must still yield picolibc-first ``-isystem`` order."""
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
-        import compile_db_lint
         from unittest.mock import patch
+
+        import compile_db_lint
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4620,24 +5616,27 @@ class PolicyLinterSimulations(unittest.TestCase):
                     return []
                 return ["-isystem", "/opt/riscv/newlib/include"]
 
-            with patch.object(
-                compile_db_lint, "clang_target_for_command", return_value="riscv32-esp-elf"
-            ), patch.object(
-                compile_db_lint, "is_cross_compile_command", return_value=True
-            ), patch.object(
-                compile_db_lint,
-                "compile_driver_path",
-                return_value=Path("/opt/riscv/bin/riscv32-esp-elf-gcc"),
-            ), patch.object(
-                compile_db_lint,
-                "_cross_toolchain_include_paths",
-                return_value=[Path("/opt/riscv/picolibc/include")],
-            ), patch.object(
-                compile_db_lint, "_compiler_isystem_flags", side_effect=_fake_isystem
-            ), patch.object(
-                compile_db_lint,
-                "_cross_sysroot",
-                return_value=Path("/opt/riscv/sysroot"),
+            with (
+                patch.object(
+                    compile_db_lint, "clang_target_for_command", return_value="riscv32-esp-elf"
+                ),
+                patch.object(compile_db_lint, "is_cross_compile_command", return_value=True),
+                patch.object(
+                    compile_db_lint,
+                    "compile_driver_path",
+                    return_value=Path("/opt/riscv/bin/riscv32-esp-elf-gcc"),
+                ),
+                patch.object(
+                    compile_db_lint,
+                    "_cross_toolchain_include_paths",
+                    return_value=[Path("/opt/riscv/picolibc/include")],
+                ),
+                patch.object(compile_db_lint, "_compiler_isystem_flags", side_effect=_fake_isystem),
+                patch.object(
+                    compile_db_lint,
+                    "_cross_sysroot",
+                    return_value=Path("/opt/riscv/sysroot"),
+                ),
             ):
                 scrubbed = compile_db_lint._scrub_cross_compile_command(
                     command, source_file=str(src)
@@ -4655,8 +5654,9 @@ class PolicyLinterSimulations(unittest.TestCase):
         """Arduino-style C++ scrub must not put libc ahead of libstdc++ (include_next)."""
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
-        import compile_db_lint
         from unittest.mock import patch
+
+        import compile_db_lint
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4664,32 +5664,37 @@ class PolicyLinterSimulations(unittest.TestCase):
             src.parent.mkdir(parents=True)
             src.write_text("void x() {}\n", encoding="utf-8")
             command = f"arm-none-eabi-g++ -std=gnu++17 -c {src}"
-            with patch.object(
-                compile_db_lint, "clang_target_for_command", return_value="arm-none-eabi"
-            ), patch.object(
-                compile_db_lint, "is_cross_compile_command", return_value=True
-            ), patch.object(
-                compile_db_lint,
-                "compile_driver_path",
-                return_value=Path("/usr/bin/arm-none-eabi-g++"),
-            ), patch.object(
-                compile_db_lint,
-                "_cross_toolchain_include_paths",
-                # Distinct spelling of libc include (Arduino scrub used to prepend this).
-                return_value=[Path("/opt/arm-none-eabi/include")],
-            ), patch.object(
-                compile_db_lint,
-                "_compiler_isystem_flags",
-                return_value=[
-                    "-isystem",
-                    "/opt/arm/include/c++/7.2.1",
-                    "-isystem",
-                    "/opt/arm/arm-none-eabi/include",
-                ],
-            ), patch.object(
-                compile_db_lint,
-                "_cross_sysroot",
-                return_value=Path("/opt/arm/sysroot"),
+            with (
+                patch.object(
+                    compile_db_lint, "clang_target_for_command", return_value="arm-none-eabi"
+                ),
+                patch.object(compile_db_lint, "is_cross_compile_command", return_value=True),
+                patch.object(
+                    compile_db_lint,
+                    "compile_driver_path",
+                    return_value=Path("/usr/bin/arm-none-eabi-g++"),
+                ),
+                patch.object(
+                    compile_db_lint,
+                    "_cross_toolchain_include_paths",
+                    # Distinct spelling of libc include (Arduino scrub used to prepend this).
+                    return_value=[Path("/opt/arm-none-eabi/include")],
+                ),
+                patch.object(
+                    compile_db_lint,
+                    "_compiler_isystem_flags",
+                    return_value=[
+                        "-isystem",
+                        "/opt/arm/include/c++/7.2.1",
+                        "-isystem",
+                        "/opt/arm/arm-none-eabi/include",
+                    ],
+                ),
+                patch.object(
+                    compile_db_lint,
+                    "_cross_sysroot",
+                    return_value=Path("/opt/arm/sysroot"),
+                ),
             ):
                 scrubbed = compile_db_lint._scrub_cross_compile_command(
                     command, source_file=str(src)
@@ -4705,9 +5710,10 @@ class PolicyLinterSimulations(unittest.TestCase):
         """Host unit-test entries in firmware/ must not beat a cross template for synthesis."""
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
+        from unittest.mock import patch
+
         import compile_db_lint
         import compile_db_util
-        from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4735,12 +5741,14 @@ class PolicyLinterSimulations(unittest.TestCase):
             def _is_cross(cmd: str) -> bool:
                 return "arm-none-eabi" in cmd
 
-            with patch.object(
-                compile_db_lint,
-                "_target_prefers_firmware_template",
-                return_value=True,
-            ), patch.object(compile_db_lint, "is_cross_compile_command", side_effect=_is_cross), patch.object(
-                compile_db_util, "is_cross_compile_command", side_effect=_is_cross
+            with (
+                patch.object(
+                    compile_db_lint,
+                    "_target_prefers_firmware_template",
+                    return_value=True,
+                ),
+                patch.object(compile_db_lint, "is_cross_compile_command", side_effect=_is_cross),
+                patch.object(compile_db_util, "is_cross_compile_command", side_effect=_is_cross),
             ):
                 tmpl = compile_db_lint._template_for_target(
                     by_file,
@@ -4773,7 +5781,9 @@ class PolicyLinterSimulations(unittest.TestCase):
             bootstrap_scan_manifest(root, source_roots=("include", "userspace"))
             write(root / "include/sample/api.h", "#pragma once\n")
             write(root / "userspace/widget.hpp", "#pragma once\n")
-            self.assertEqual(header_role_for_path(root / "include/sample/api.h", root), "c_compatible")
+            self.assertEqual(
+                header_role_for_path(root / "include/sample/api.h", root), "c_compatible"
+            )
             self.assertEqual(header_role_for_path(root / "userspace/widget.hpp", root), "cxx_only")
             c_rx = re.compile(clang_tidy_header_filter_regex(root, role="c_compatible"))
             cxx_rx = re.compile(clang_tidy_header_filter_regex(root, role="cxx_only"))
@@ -4831,8 +5841,13 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "include/c_header.h": "#pragma once\n#include <cstdint>\n",
                 "include/using_alias.h": "#pragma once\nusing cb_t = void (*)(void);\n",
                 "include/enum_base.h": "#pragma once\nenum kind_t : int { KIND_A = 0 };\n",
-                "include/static_cast.h": "#pragma once\nstatic inline void* f(int* p) { return static_cast<void*>(p); }\n",
-                "include/const_auto.h": "#pragma once\nstatic inline int f(void) { const auto x = 1; return x; }\n",
+                "include/static_cast.h": (
+                    "#pragma once\nstatic inline void* f(int* p) { return static_cast<void*>(p); "
+                    "}\n"
+                ),
+                "include/const_auto.h": (
+                    "#pragma once\nstatic inline int f(void) { const auto x = 1; return x; }\n"
+                ),
                 "include/plain_c.h": "#pragma once\n#include <stdint.h>\nvoid f(uint8_t x);\n",
             }
             for rel, body in cases.items():
@@ -4876,8 +5891,8 @@ class PolicyLinterSimulations(unittest.TestCase):
     def test_firmware_compile_source_roots_unifies_nfc_and_lifi(self) -> None:
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
-        from consumer_manifest import firmware_compile_source_roots
         from compile_db_util import storage_key_prefers_firmware_compile
+        from consumer_manifest import firmware_compile_source_roots
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4904,12 +5919,8 @@ class PolicyLinterSimulations(unittest.TestCase):
             self.assertIn("esp-idf", roots)
             self.assertNotIn("tests/firmware", roots)
             self.assertTrue(storage_key_prefers_firmware_compile("firmware/src/x.c", root))
-            self.assertTrue(
-                storage_key_prefers_firmware_compile("esp-idf/main/app_main.c", root)
-            )
-            self.assertFalse(
-                storage_key_prefers_firmware_compile("userspace/app.cpp", root)
-            )
+            self.assertTrue(storage_key_prefers_firmware_compile("esp-idf/main/app_main.c", root))
+            self.assertFalse(storage_key_prefers_firmware_compile("userspace/app.cpp", root))
             self.assertFalse(
                 storage_key_prefers_firmware_compile("tests/firmware/test_x.cpp", root)
             )
@@ -4918,8 +5929,8 @@ class PolicyLinterSimulations(unittest.TestCase):
         """Cross-template roots come from firmware source even when shared_c_cxx is null."""
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
-        from consumer_manifest import firmware_compile_source_roots, shared_c_cxx_source_roots
         from compile_db_util import storage_key_prefers_firmware_compile
+        from consumer_manifest import firmware_compile_source_roots, shared_c_cxx_source_roots
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4980,12 +5991,13 @@ class PolicyLinterSimulations(unittest.TestCase):
         from hardening_verify import compile_db_openssf_audit_scope, verify_compile_commands_openssf
 
         kit = LINT_KIT
-        manifest_path = kit / "config/openssf-hardening-manifest.yaml"
+        kit / "config/openssf-hardening-manifest.yaml"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write(
                 root / ".github/lint-c-cpp.yaml",
-                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+                "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+                "  public_headers_dir: include/sample\n"
                 "  source_roots: [core, esp-idf]\n"
                 "compile_db:\n"
                 "  firmware:\n"
@@ -4998,7 +6010,9 @@ class PolicyLinterSimulations(unittest.TestCase):
             (root / "core").mkdir()
             (root / "esp-idf/main").mkdir(parents=True)
             (root / "core/app.c").write_text("void app(void) {}\n", encoding="utf-8")
-            (root / "esp-idf/main/app_main.c").write_text("void app_main(void) {}\n", encoding="utf-8")
+            (root / "esp-idf/main/app_main.c").write_text(
+                "void app_main(void) {}\n", encoding="utf-8"
+            )
             host_cache = root / "build/lint/tests/CMakeCache.txt"
             host_cache.parent.mkdir(parents=True)
             # Empty / unconfigured probe set: probe-gated flags are not silently required.
@@ -5058,8 +6072,11 @@ class PolicyLinterSimulations(unittest.TestCase):
                     return "riscv32-esp-elf"
                 return "x86_64-host"
 
-            with patch.object(compile_db_util, "host_target_triple", mock_host_triple), patch.object(
-                compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+            with (
+                patch.object(compile_db_util, "host_target_triple", mock_host_triple),
+                patch.object(
+                    compile_db_util, "compiler_target_triple", side_effect=mock_compiler_target
+                ),
             ):
                 scope = compile_db_openssf_audit_scope(
                     root,
@@ -5119,7 +6136,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                     scan_paths=source_paths,
                 )
             }
-            unsafe_sources = {
+            {
                 path.relative_to(root).as_posix()
                 for path in helper.filter_clang_tidy_sources(
                     merged_db,
@@ -5153,9 +6170,15 @@ class PolicyLinterSimulations(unittest.TestCase):
             write(root / "core/a.c", "void a(void) {}\n")
             write(root / "port/b.c", "void b(void) {}\n")
             write(root / "include/sample/c.h", "#pragma once\n")
-            write(root / "include/sample/mem_util.h", "#pragma once\nstatic inline void w(void *p){(void)p;}\n")
+            write(
+                root / "include/sample/mem_util.h",
+                "#pragma once\nstatic inline void w(void *p){(void)p;}\n",
+            )
             unsafe_paths = central_job_paths(root, JOB_UNSAFE_API)
-            targets = {path.relative_to(root).as_posix() for path in helper.clang_tidy_scan_targets(unsafe_paths)}
+            targets = {
+                path.relative_to(root).as_posix()
+                for path in helper.clang_tidy_scan_targets(unsafe_paths)
+            }
             enforced = {path.relative_to(root).as_posix() for path in unsafe_paths}
         self.assertEqual(targets, enforced)
         self.assertIn("include/sample/mem_util.h", targets)
@@ -5169,13 +6192,15 @@ class PolicyLinterSimulations(unittest.TestCase):
             write(root / "core/app.c", "void app(void) {}\n")
             write(root / "include/sample/mem_util.h", "#pragma once\nvoid w(void);\n")
             full = {p.relative_to(root).as_posix() for p in central_job_paths(root, JOB_SOURCE)}
-            strict = {p.relative_to(root).as_posix() for p in central_job_paths(root, JOB_UNSAFE_API)}
+            strict = {
+                p.relative_to(root).as_posix() for p in central_job_paths(root, JOB_UNSAFE_API)
+            }
         self.assertIn("include/sample/mem_util.h", full)
         self.assertIn("include/sample/mem_util.h", strict)
         self.assertIn("core/app.c", strict)
 
     def test_duplicate_definitions_flags_header_exposed_shadow_constant(self) -> None:
-        helper = load_helper("policy/shared_constant_dupes.py")
+        load_helper("policy/shared_constant_dupes.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -5188,15 +6213,17 @@ class PolicyLinterSimulations(unittest.TestCase):
         self.assertTrue(any("SAMPLE_LOCAL" in error for error in errors), errors)
 
     def test_duplicate_includes_catches_mixed_angle_and_quote_duplicates(self) -> None:
-        helper = load_helper("policy/duplicate_includes.py")
+        load_helper("policy/duplicate_includes.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
             write(root / "core/bad.c", '#include <foo.h>\n#include "foo.h"\n')
-            write(root / "core/good.c", 'const char *s = "#include \\"foo.h\\"";\n#include "foo.h"\n')
+            write(
+                root / "core/good.c", 'const char *s = "#include \\"foo.h\\"";\n#include "foo.h"\n'
+            )
             write(root / "core/exact_dup.c", '#include "foo.h"\n#include "foo.h"\n')
-            write(root / "core/good.h", "// license\n\n#pragma once\n#include \"foo.h\"\n")
-            write(root / "core/missing_pragma.h", "#include \"foo.h\"\n")
+            write(root / "core/good.h", '// license\n\n#pragma once\n#include "foo.h"\n')
+            write(root / "core/missing_pragma.h", '#include "foo.h"\n')
             reported = reported_basenames(policy_lint("duplicate_includes.py", root, "source"))
         assert_simulation_reported(
             self,
@@ -5207,7 +6234,7 @@ class PolicyLinterSimulations(unittest.TestCase):
         self.assertIn("missing_pragma.h", reported)
 
     def test_early_return_flags_wrapped_success_but_allows_dispatch(self) -> None:
-        helper = load_helper("policy/guard_clause_style.py")
+        load_helper("policy/guard_clause_style.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -5230,7 +6257,7 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
             reported = reported_basenames(policy_lint("guard_clause_style.py", root, "source"))
         assert_simulation_reported(self, reported, violations=["bad.c"], clean=["good.c"])
-        helper = load_helper("policy/banned_libc_io.py")
+        load_helper("policy/banned_libc_io.py")
         from scan_policy import BANNED_C_API_NAMES, BANNED_OUTPUT_C_API_NAMES
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -5242,31 +6269,27 @@ class PolicyLinterSimulations(unittest.TestCase):
                 root / "core/sample_io.c",
                 "namespace sample { void sample_stdout_line(const char *) {} }\n",
             )
-            reported = reported_basenames(
-                policy_lint("banned_libc_io.py", root, "unsafe_api")
-            )
+            reported = reported_basenames(policy_lint("banned_libc_io.py", root, "unsafe_api"))
         for func in BANNED_OUTPUT_C_API_NAMES:
             self.assertIn(f"bad_{func}.c", reported, func)
         self.assertNotIn("sample_io.c", reported)
-        self.assertTrue(BANNED_OUTPUT_C_API_NAMES <= frozenset(BANNED_C_API_NAMES))
+        self.assertTrue(frozenset(BANNED_C_API_NAMES) >= BANNED_OUTPUT_C_API_NAMES)
 
     def test_unsafe_api_allows_only_wrapper_sink_files(self) -> None:
-        helper = load_helper("policy/banned_libc_io.py")
-        bad = "void f(void) { std::println(\"x\"); }\n"
-        allowed = "void f(void) { std::println(\"{}\", s); std::fflush(stdout); }\n"
+        load_helper("policy/banned_libc_io.py")
+        bad = 'void f(void) { std::println("x"); }\n'
+        allowed = 'void f(void) { std::println("{}", s); std::fflush(stdout); }\n'
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
             write(root / "core/bad.cpp", bad)
             write(root / "core/sample_io.c", allowed)
-            reported = reported_basenames(
-                policy_lint("banned_libc_io.py", root, "unsafe_api")
-            )
+            reported = reported_basenames(policy_lint("banned_libc_io.py", root, "unsafe_api"))
         self.assertIn("bad.cpp", reported)
         self.assertNotIn("sample_io.c", reported)
 
     def test_unsafe_api_flags_integer_parse_and_ignores_comments_and_canonical_impl(self) -> None:
-        helper = load_helper("policy/banned_libc_io.py")
+        load_helper("policy/banned_libc_io.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -5279,9 +6302,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                 root / "core/sample_parse.h",
                 "long f(const char *s) { return strtol(s, 0, 10); }\n",
             )
-            reported = reported_basenames(
-                policy_lint("banned_libc_io.py", root, "unsafe_api")
-            )
+            reported = reported_basenames(policy_lint("banned_libc_io.py", root, "unsafe_api"))
         self.assertIn("bad.cpp", reported)
         self.assertNotIn("good.cpp", reported)
         self.assertNotIn("sample_parse.h", reported)
@@ -5317,8 +6338,67 @@ class PolicyLinterSimulations(unittest.TestCase):
         self.assertIn("src.c", targets)
         self.assertNotIn("third-party/vendor.c", targets)
 
+    def test_license_header_repair_removes_duplicate_headers(self) -> None:
+        """A file carrying the // corpus and a legacy /* */ header (or two // runs)
+        must collapse to exactly one header; a /* */-only header is replaced, not
+        prepended to; ordinary comments after the corpus survive."""
+        helper = load_helper("policy/spdx_headers.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_policy_test_manifest(root)
+            helper.configure_from_manifest(root)
+            year = helper._year()
+            corpus = helper.cpp_header_text(year)
+            good = corpus + "int x;\n"
+            block = (
+                "/* SPDX-License-Identifier: Apache-2.0 */\n"
+                "/*\n"
+                f" * Copyright (C) {year} Nero Duality, LLC.\n"
+                " */\n"
+            )
+            for name, text in {
+                "stacked": corpus + block + "\nint x;\n",
+                "block_only": block + "\nint x;\n",
+                "twice": corpus + corpus + "int x;\n",
+            }.items():
+                repaired, changed = helper.repair_cpp(text, year)
+                self.assertTrue(changed, name)
+                self.assertEqual(repaired, good, name)
+                self.assertEqual(repaired.count("SPDX-License-Identifier:"), 1, name)
+                _, again = helper.repair_cpp(repaired, year)
+                self.assertFalse(again, name)
+            kept = corpus + "/* Notes: see limitations under the License. */\nint x;\n"
+            _, changed = helper.repair_cpp(kept, year)
+            self.assertFalse(changed)
+            lead = '#include "cbmc.h"\n\n'
+            repaired, changed = helper.repair_cpp(lead + corpus + block + "\nint x;\n", year)
+            moved = corpus + '#include "cbmc.h"\n\nint x;\n'
+            self.assertTrue(changed)
+            self.assertEqual(repaired, moved)
+            repaired, changed = helper.repair_cpp(lead + good, year)
+            self.assertTrue(changed)
+            self.assertEqual(repaired, moved)
+            _, changed = helper.repair_cpp(moved, year)
+            self.assertFalse(changed)
+            chatter = (
+                corpus + "/* See limitations under the License.\n"
+                " * Also limitations under the License.\n */\nint x;\n"
+            )
+            _, changed = helper.repair_cpp(chatter, year)
+            self.assertFalse(changed)
+            hash_corpus = helper.hash_header_text(year)
+            repaired, changed = helper.repair_hash(
+                "#!/usr/bin/env bash\n" + hash_corpus + hash_corpus + "echo ok\n", year
+            )
+            self.assertTrue(changed)
+            self.assertEqual(repaired, "#!/usr/bin/env bash\n" + hash_corpus + "echo ok\n")
+            md = helper.md_header_text(year)
+            repaired, changed = helper.repair_md(md + md + "# Title\n", year)
+            self.assertTrue(changed)
+            self.assertEqual(repaired, md + "# Title\n")
+
     def test_null_nodiscard_flags_violations_and_skips_clean_files(self) -> None:
-        helper = load_helper("policy/null_nodiscard.py")
+        load_helper("policy/null_nodiscard.py")
         cases = {
             "raw_null.c": "void f(void *p) { if (p == NULL) {} }\n",
             "legacy_old_null.c": "void f(void *p) { if (p == OLD_NULL) {} }\n",
@@ -5340,9 +6420,7 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
             for name, body in cases.items():
                 write(root / "core" / name, body)
-            reported = reported_basenames(
-                policy_lint("null_nodiscard.py", root, "unsafe_api")
-            )
+            reported = reported_basenames(policy_lint("null_nodiscard.py", root, "unsafe_api"))
         assert_simulation_reported(
             self,
             reported,
@@ -5350,8 +6428,25 @@ class PolicyLinterSimulations(unittest.TestCase):
             clean=["comment_ok.c"],
         )
 
+    def test_null_nodiscard_line_numbers_survive_masked_line_breaks(self) -> None:
+        # splitlines() also breaks on \f, \v and U+2028, which the comment and
+        # string mask blanks: splitting raw and masked text that way misaligns
+        # them (and zip(strict=True) raises).
+        load_helper("policy/null_nodiscard.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_policy_test_manifest(root)
+            write(root / "include/sample/sample_null.h", "#define SAMPLE_NULL nullptr\n")
+            write(
+                root / "core/breaks.c",
+                '/* page\fbreak */\n// a\vb\nconst char *s = "x\u2028y";\n'
+                "void f(void *p) { if (p == NULL) {} }\n",
+            )
+            errors = policy_lint("null_nodiscard.py", root, "unsafe_api")
+        self.assertTrue(any(":4: raw NULL" in error for error in errors), errors)
+
     def test_relative_includes_rejects_parent_traversal(self) -> None:
-        helper = load_helper("policy/relative_includes.py")
+        load_helper("policy/relative_includes.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -5361,12 +6456,15 @@ class PolicyLinterSimulations(unittest.TestCase):
         assert_simulation_reported(self, reported, violations=["bad.c"], clean=["good.c"])
 
     def test_nolint_audit_reports_and_rejects_suppressions(self) -> None:
-        helper = load_helper("policy/nolint_audit.py")
+        load_helper("policy/nolint_audit.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
             write(root / "core/clean.c", "int ok(void) { return 0; }\n")
-            write(root / "core/bad_nextline.c", "// NOLINTNEXTLINE(foo)\nint bad(void) { return 1; }\n")
+            write(
+                root / "core/bad_nextline.c",
+                "// NOLINTNEXTLINE(foo)\nint bad(void) { return 1; }\n",
+            )
             write(root / "core/bad_nolint.c", "int x; // NOLINT(readability)\n")
             write(root / "core/bad_begin.c", "// NOLINTBEGIN\nint a = 1;\n// NOLINTEND\n")
             write(
@@ -5398,22 +6496,25 @@ class PolicyLinterSimulations(unittest.TestCase):
         )
 
     def test_resource_lifetime_flags_split_manual_pairs_and_allows_canonical_wrappers(self) -> None:
-        helper = load_helper("policy/raii_lifetime.py")
+        load_helper("policy/raii_lifetime.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
-            write(root / "userspace/bad.c", "void f(void) { FILE *fp = fopen\n(\"x\", \"r\"); fclose(fp); }\n")
+            write(
+                root / "userspace/bad.c",
+                'void f(void) { FILE *fp = fopen\n("x", "r"); fclose(fp); }\n',
+            )
             write(
                 root / "include/sample/sample_file_raii.h",
-                "void f(void) { FILE *fp = fopen(\"x\", \"r\"); fclose(fp); }\n",
+                'void f(void) { FILE *fp = fopen("x", "r"); fclose(fp); }\n',
             )
-            reported = reported_basenames(
-                policy_lint("raii_lifetime.py", root, "unsafe_api")
-            )
-        assert_simulation_reported(self, reported, violations=["bad.c"], clean=["sample_file_raii.h"])
+            reported = reported_basenames(policy_lint("raii_lifetime.py", root, "unsafe_api"))
+        assert_simulation_reported(
+            self, reported, violations=["bad.c"], clean=["sample_file_raii.h"]
+        )
 
     def test_safe_indexing_flags_unchecked_external_buffer_access(self) -> None:
-        helper = load_helper("policy/pointer_bounds.py")
+        load_helper("policy/pointer_bounds.py")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
@@ -5441,25 +6542,30 @@ class PolicyLinterSimulations(unittest.TestCase):
         errors: list[str] = []
         helper.validate_policy_comment("T2T", "SAMPLE_RETRY_ATTEMPTS", "", sample, errors)
         self.assertTrue(errors)
-        self.assertNotEqual(helper.normalize_value("6u")[0], helper.normalize_value(defs["SAMPLE_MISMATCH"])[0])
+        self.assertNotEqual(
+            helper.normalize_value("6u")[0], helper.normalize_value(defs["SAMPLE_MISMATCH"])[0]
+        )
 
     def test_spec_traceability_main_flags_missing_symbol_and_value_pair(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
-            write(root / "include/sample/limits.h", "/* [ISO14443-3] section 1 */\n#define SAMPLE_PRESENT 4u\n")
+            write(
+                root / "include/sample/limits.h",
+                "/* [ISO14443-3] section 1 */\n#define SAMPLE_PRESENT 4u\n",
+            )
             manifest = write(
                 root / "docs/spec-traceability.yaml",
                 "constants:\n"
                 "  - spec_prefix: ISO14443-3\n"
                 "    symbol: SAMPLE_PRESENT\n"
-                "    spec_value: \"5\"\n"
-                "    ref: \"section 1\"\n"
+                '    spec_value: "5"\n'
+                '    ref: "section 1"\n'
                 "    source: include/sample/limits.h\n"
                 "  - spec_prefix: ISO14443-3\n"
                 "    symbol: SAMPLE_MISSING\n"
-                "    spec_value: \"4\"\n"
-                "    ref: \"section 1\"\n"
+                '    spec_value: "4"\n'
+                '    ref: "section 1"\n'
                 "    source: include/sample/limits.h\n",
             )
             paths_file = root / "source.paths"
@@ -5473,8 +6579,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                 ),
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("SAMPLE_PRESENT: spec=5 code=4", result.stderr)
@@ -5490,7 +6595,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "constants:\n"
                 "  - spec_prefix: ISO14443-3\n"
                 "    symbol: SAMPLE_PRESENT\n"
-                "    spec_value: \"4\"\n"
+                '    spec_value: "4"\n'
                 "    source: include/sample/limits.h\n",
             )
             paths_file = root / "source.paths"
@@ -5504,8 +6609,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                 ),
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
             )
         self.assertEqual(result.returncode, 1)
         self.assertIn("SAMPLE_PRESENT: ref must be non-empty", result.stderr)
@@ -5517,8 +6621,20 @@ class PolicyLinterSimulations(unittest.TestCase):
         self.assertTrue(any("spec_value" in error for error in helper.validate_manifest(bad)))
         data = {
             "constants": [
-                {"spec_prefix": "Z", "symbol": "B", "spec_value": "1", "ref": "section 1", "source": "b.h"},
-                {"spec_prefix": "A", "symbol": "A", "spec_value": "2", "ref": "section 2", "source": "a.h"},
+                {
+                    "spec_prefix": "Z",
+                    "symbol": "B",
+                    "spec_value": "1",
+                    "ref": "section 1",
+                    "source": "b.h",
+                },
+                {
+                    "spec_prefix": "A",
+                    "symbol": "A",
+                    "spec_value": "2",
+                    "ref": "section 2",
+                    "source": "a.h",
+                },
             ]
         }
         rendered = helper.canonical_text("", data)
@@ -5533,17 +6649,20 @@ class PolicyLinterSimulations(unittest.TestCase):
             write_policy_test_manifest(root)
             paths, errors = yamllint_manifest_paths(root)
             self.assertEqual(errors, [])
-            self.assertIn(".github/lint-c-cpp.yaml", [p.relative_to(root).as_posix() for p in paths])
-            scan_only = {
-                p.relative_to(root).as_posix()
-                for p in central_job_paths(root, "yaml")
-            }
+            self.assertIn(
+                ".github/lint-c-cpp.yaml", [p.relative_to(root).as_posix() for p in paths]
+            )
+            scan_only = {p.relative_to(root).as_posix() for p in central_job_paths(root, "yaml")}
             self.assertIn(".github/lint-c-cpp.yaml", scan_only)
-        self.assertEqual(helper.yamllint_ok_message(0), "yamllint: OK (0 scanned, 0 auto-formatted)")
-        self.assertEqual(helper.yamllint_ok_message(2), "yamllint: OK (2 scanned, 0 auto-formatted)")
+        self.assertEqual(
+            helper.yamllint_ok_message(0), "yamllint: OK (0 scanned, 0 auto-formatted)"
+        )
+        self.assertEqual(
+            helper.yamllint_ok_message(2), "yamllint: OK (2 scanned, 0 auto-formatted)"
+        )
 
     def test_unsafe_api_flags_each_banned_c_api(self) -> None:
-        helper = load_helper("policy/banned_libc_io.py")
+        load_helper("policy/banned_libc_io.py")
         from scan_policy import BANNED_C_API_NAMES, JOB_UNSAFE_API
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -5558,19 +6677,20 @@ class PolicyLinterSimulations(unittest.TestCase):
             self.assertNotIn(f"ignored_{api}.ino", reported, api)
 
     def test_unsafe_api_fallback_catches_split_banned_calls_in_port(self) -> None:
-        helper = load_helper("policy/banned_libc_io.py")
+        load_helper("policy/banned_libc_io.py")
         from scan_policy import JOB_UNSAFE_API
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_policy_test_manifest(root)
             write(root / "core/ignored.ino", "void f(char *d, const char *s) { strcpy\n(d, s); }\n")
-            write(root / "port/board/bad.c", "void f(void) { system\n(\"true\"); }\n")
+            write(root / "port/board/bad.c", 'void f(void) { system\n("true"); }\n')
             reported = reported_basenames(policy_lint("banned_libc_io.py", root, JOB_UNSAFE_API))
         self.assertNotIn("ignored.ino", reported)
         self.assertIn("bad.c", reported)
 
     def test_cxx_heap_policy_flags_new_delete_and_skips_wrapper_sink(self) -> None:
-        helper = load_helper("policy/banned_cxx_heap.py")
+        load_helper("policy/banned_cxx_heap.py")
         cases = {
             "new": "struct S {}; void f(void) { auto *p = new S; delete p; }\n",
             "placement": "struct S {}; void f(void *a) { auto *p = new (a) S; (void)p; }\n",
@@ -5584,11 +6704,12 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
             for name, body in cases.items():
                 write(root / "core" / f"bad_{name}.cpp", body)
-            write(root / "core/bad.cpp", "struct S {}; void f(void) { auto *p = new\n S; delete p; }\n")
-            write(root / "core/malloc_ok.c", "void f(void) { void *p = malloc(16); free(p); }\n")
-            reported = reported_basenames(
-                policy_lint("banned_cxx_heap.py", root, "unsafe_api")
+            write(
+                root / "core/bad.cpp",
+                "struct S {}; void f(void) { auto *p = new\n S; delete p; }\n",
             )
+            write(root / "core/malloc_ok.c", "void f(void) { void *p = malloc(16); free(p); }\n")
+            reported = reported_basenames(policy_lint("banned_cxx_heap.py", root, "unsafe_api"))
         violations = [f"bad_{name}.cpp" for name in cases] + ["bad.cpp"]
         assert_simulation_reported(
             self, reported, violations=violations, clean=["sample_file_raii.h", "malloc_ok.c"]
@@ -5635,7 +6756,9 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
             data = _yaml.safe_load(missing.read_text(encoding="utf-8"))
             issues = validate_compile_db(data, missing)
-            self.assertFalse(any("firmware" in item and "source" in item for item in issues), issues)
+            self.assertFalse(
+                any("firmware" in item and "source" in item for item in issues), issues
+            )
 
         from consumer_manifest import compile_db_firmware_entries
 
@@ -5710,8 +6833,12 @@ class PolicyLinterSimulations(unittest.TestCase):
             by_db = load_compile_entries_by_db(root)
             self.assertIn("build/lint/firmware/uno/compile_commands.json", by_db)
             self.assertIn("build/lint/firmware/wba/compile_commands.json", by_db)
-            self.assertIn("firmware/shared.c", by_db["build/lint/firmware/uno/compile_commands.json"])
-            self.assertIn("firmware/shared.c", by_db["build/lint/firmware/wba/compile_commands.json"])
+            self.assertIn(
+                "firmware/shared.c", by_db["build/lint/firmware/uno/compile_commands.json"]
+            )
+            self.assertIn(
+                "firmware/shared.c", by_db["build/lint/firmware/wba/compile_commands.json"]
+            )
             richest = load_richest_compile_entries(root)
             prov = entry_compile_db_provenance(richest["firmware/shared.c"])
             self.assertEqual(
@@ -5737,7 +6864,9 @@ class PolicyLinterSimulations(unittest.TestCase):
             self.assertIn(PROVENANCE_KEY, in_memory)
             scrubbed = scrub_compile_entry_for_clang_tidy(in_memory)
             self.assertNotIn(PROVENANCE_KEY, scrubbed)
-            self.assertTrue(set(scrubbed.keys()) <= {"directory", "file", "command", "arguments", "output"})
+            self.assertTrue(
+                set(scrubbed.keys()) <= {"directory", "file", "command", "arguments", "output"}
+            )
             self.assertEqual(public_compile_entry(in_memory), scrubbed)
             # In-memory provenance must survive scrub (scrub copies).
             self.assertIn(PROVENANCE_KEY, in_memory)
@@ -5752,9 +6881,7 @@ class PolicyLinterSimulations(unittest.TestCase):
             write_clang_tidy_compile_commands(
                 db, merge_dir / "compile_commands.json", scan_paths=[src]
             )
-            written = json.loads(
-                (merge_dir / "compile_commands.json").read_text(encoding="utf-8")
-            )
+            written = json.loads((merge_dir / "compile_commands.json").read_text(encoding="utf-8"))
             self.assertEqual(len(written), 1)
             self.assertNotIn(PROVENANCE_KEY, written[0])
             for key in written[0]:
@@ -5779,8 +6906,8 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
 
     def test_openssf_audits_each_firmware_db_separately(self) -> None:
-        from unittest.mock import patch
         import json
+        from unittest.mock import patch
 
         if str(COMPILE_DB_DIR) not in sys.path:
             sys.path.insert(0, str(COMPILE_DB_DIR))
@@ -5864,12 +6991,8 @@ class PolicyLinterSimulations(unittest.TestCase):
                     "# no HAVE_* probes\n", encoding="utf-8"
                 )
 
-            _add, uno_remove = override_dials_for_compile_db(
-                root, "openssf-hardening", uno_json
-            )
-            _add, wba_remove = override_dials_for_compile_db(
-                root, "openssf-hardening", wba_json
-            )
+            _add, uno_remove = override_dials_for_compile_db(root, "openssf-hardening", uno_json)
+            _add, wba_remove = override_dials_for_compile_db(root, "openssf-hardening", wba_json)
             self.assertIn("-Werror", uno_remove or ())
             self.assertIn("-Wall", wba_remove or ())
             self.assertNotEqual(uno_remove, wba_remove)
@@ -5884,12 +7007,8 @@ class PolicyLinterSimulations(unittest.TestCase):
             wba_manifest = openssf_manifest_for_audit(
                 root, kit_manifest, lookup_key="firmware/shared.c", preferred_compile_db=wba_json
             )
-            uno_flags = {
-                str(item) for item in uno_manifest.get("coverage", {}).get("flags", [])
-            }
-            wba_flags = {
-                str(item) for item in wba_manifest.get("coverage", {}).get("flags", [])
-            }
+            uno_flags = {str(item) for item in uno_manifest.get("coverage", {}).get("flags", [])}
+            wba_flags = {str(item) for item in wba_manifest.get("coverage", {}).get("flags", [])}
             self.assertNotIn("-Werror", uno_flags)
             self.assertIn("-Wall", uno_flags)
             self.assertNotIn("-Wall", wba_flags)
@@ -5898,20 +7017,26 @@ class PolicyLinterSimulations(unittest.TestCase):
             def mock_host_triple() -> str:
                 return "x86_64-host"
 
-            with patch.object(compile_db_util, "host_target_triple", mock_host_triple):
-                with patch.object(
+            with (
+                patch.object(compile_db_util, "host_target_triple", mock_host_triple),
+                patch.object(
                     compile_db_util,
                     "clang_target_for_command",
                     side_effect=lambda cmd: (
-                        "arm-uno" if "uno-gcc" in cmd else "arm-wba" if "wba-gcc" in cmd else "x86_64-host"
+                        "arm-uno"
+                        if "uno-gcc" in cmd
+                        else "arm-wba"
+                        if "wba-gcc" in cmd
+                        else "x86_64-host"
                     ),
-                ):
-                    issues = verify_compile_commands_openssf(
-                        root,
-                        kit,
-                        entries_by_key={},
-                        source_paths=[src],
-                    )
+                ),
+            ):
+                issues = verify_compile_commands_openssf(
+                    root,
+                    kit,
+                    entries_by_key={},
+                    source_paths=[src],
+                )
             # UNO dials out -Werror (present in command); WBA dials out -Wall (present).
             # Both should pass their own dialed requirements.
             self.assertEqual(issues, [], issues)
@@ -5933,20 +7058,26 @@ class PolicyLinterSimulations(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch.object(compile_db_util, "host_target_triple", mock_host_triple):
-                with patch.object(
+            with (
+                patch.object(compile_db_util, "host_target_triple", mock_host_triple),
+                patch.object(
                     compile_db_util,
                     "clang_target_for_command",
                     side_effect=lambda cmd: (
-                        "arm-uno" if "uno-gcc" in cmd else "arm-wba" if "wba-gcc" in cmd else "x86_64-host"
+                        "arm-uno"
+                        if "uno-gcc" in cmd
+                        else "arm-wba"
+                        if "wba-gcc" in cmd
+                        else "x86_64-host"
                     ),
-                ):
-                    issues = verify_compile_commands_openssf(
-                        root,
-                        kit,
-                        entries_by_key={},
-                        source_paths=[src],
-                    )
+                ),
+            ):
+                issues = verify_compile_commands_openssf(
+                    root,
+                    kit,
+                    entries_by_key={},
+                    source_paths=[src],
+                )
             labeled = " ".join(issues)
             self.assertIn(f"[{wba_json}]", labeled)
             self.assertIn("-Wextra", labeled)
@@ -5954,10 +7085,10 @@ class PolicyLinterSimulations(unittest.TestCase):
 
     def test_hardening_flags_mk_preserves_order_and_language_split(self) -> None:
         from hardening_verify import (
-            generate_hardening_flags_mk,
-            load_hardening_manifest,
             _ordered_language_coverage_flags,
             _ordered_make_definitions,
+            generate_hardening_flags_mk,
+            load_hardening_manifest,
         )
 
         manifest = load_hardening_manifest(LINT_KIT)

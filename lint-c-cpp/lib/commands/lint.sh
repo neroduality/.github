@@ -129,6 +129,8 @@ source "${toolchain}/python_lint.sh"
 
 shopt -s nullglob
 
+# read_scan_paths_into fills these through a nameref, which shellcheck cannot follow.
+md_files=() format_files=() shell_scripts=() python_files=()
 read_scan_paths_into markdown md_files
 read_scan_paths_into format_c format_files
 read_scan_paths_into shell shell_scripts
@@ -340,18 +342,18 @@ run_clang_tidy_filtered() {
   set +e
   if ((drop_wrappers != 0)); then
     if [[ -n $run_clang_tidy_bin ]]; then
-      run "$run_clang_tidy_bin" -warnings-as-errors '*' "${tidy_args[@]}" "${files[@]}" 2>&1 \
-        | python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
+      run "$run_clang_tidy_bin" -warnings-as-errors '*' "${tidy_args[@]}" "${files[@]}" 2>&1 |
+        python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
       pipe_ec=("${PIPESTATUS[@]}")
       ec=${pipe_ec[0]}
       filter_ec=${pipe_ec[1]}
     else
       if [[ -n $config_file ]]; then
-        run "$clang_tidy_bin" -p "$compile_db_p" --warnings-as-errors='*' -config-file="$config_file" "${files[@]}" 2>&1 \
-          | python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
+        run "$clang_tidy_bin" -p "$compile_db_p" --warnings-as-errors='*' -config-file="$config_file" "${files[@]}" 2>&1 |
+          python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
       else
-        run "$clang_tidy_bin" -p "$compile_db_p" --warnings-as-errors='*' "${files[@]}" 2>&1 \
-          | python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
+        run "$clang_tidy_bin" -p "$compile_db_p" --warnings-as-errors='*' "${files[@]}" 2>&1 |
+          python3 -u "$filter_py" --repo-root "$repo_root" --stream --wrapper-status
       fi
       pipe_ec=("${PIPESTATUS[@]}")
       ec=${pipe_ec[0]}
@@ -498,11 +500,11 @@ if ((custom_lints_only == 0)); then
       write_scan_paths source "$source_paths"
       write_scan_paths unsafe_api "$unsafe_paths"
       if ! python3 "${helpers}/compile_db/compile_db_lint.py" \
-          --repo-root "$repo_root" \
-          --lint-kit "$lint_kit" \
-          --source-paths-file "$source_paths" \
-          --unsafe-api-paths-file "$unsafe_paths" \
-          clang-tidy-batches >"$tidy_batches_file" 2>"$tidy_log"; then
+        --repo-root "$repo_root" \
+        --lint-kit "$lint_kit" \
+        --source-paths-file "$source_paths" \
+        --unsafe-api-paths-file "$unsafe_paths" \
+        clang-tidy-batches >"$tidy_batches_file" 2>"$tidy_log"; then
         if [[ -s $tidy_log ]]; then
           cat "$tidy_log" >&2
         fi
@@ -651,12 +653,12 @@ else
 fi
 
 if lint_job_enabled spec_traceability; then
-  if python3 -c "
+  if python3 - "$repo_root" <<'PY'; then
 import sys
 from pathlib import Path
 from consumer_manifest import spec_traceability_path
-sys.exit(0 if spec_traceability_path(Path('$repo_root')) else 1)
-"; then
+sys.exit(0 if spec_traceability_path(Path(sys.argv[1])) else 1)
+PY
     section spec_traceability "Verify spec traceability manifest"
     want_pyyaml "spec traceability"
     run_python_policy_linter policy/spec_traceability.py "update docs/spec-traceability.yaml or fix source literals."

@@ -39,7 +39,6 @@ from scan_policy import (
     bounded_recursion_annotation,
     canonical_bounds_headers,
     canonical_null_header,
-    public_headers_dir as scan_public_headers_dir,
     is_canonical_index_file,
     magic_literal_constants_header_basenames,
     null_include_headers,
@@ -47,6 +46,9 @@ from scan_policy import (
     safe_indexing_helpers,
     stack_array_min,
     stack_array_path_prefixes,
+)
+from scan_policy import (
+    public_headers_dir as scan_public_headers_dir,
 )
 
 _CXX_SUFFIXES = frozenset({".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"})
@@ -108,7 +110,6 @@ def _build_null_policy(repo_root: Path) -> NullPolicy:
 def _spec_tracked_symbols(repo_root: Path) -> frozenset[str]:
     try:
         import yaml
-
         from consumer_manifest import spec_traceability_path
     except ImportError:
         return frozenset()
@@ -138,8 +139,7 @@ def _build_raii_pairs(repo_root: Path) -> tuple[RaiiPair, ...]:
                 acquire_rx=tuple(re.compile(p) for p in pair["acquire"]),
                 release_rx=tuple(re.compile(p) for p in pair["release"]),
                 canonical_files=frozenset(
-                    (repo_root / rel).resolve()
-                    for rel in pair["canonical_files"]
+                    (repo_root / rel).resolve() for rel in pair["canonical_files"]
                 ),
             )
         )
@@ -156,7 +156,7 @@ def _canonical_null_paths(repo_root: Path) -> frozenset[Path]:
 
 
 def _walk_manifest_paths(repo_root: Path) -> list[Path]:
-    from scan_policy import iter_job_paths, JOB_SOURCE
+    from scan_policy import JOB_SOURCE, iter_job_paths
 
     return iter_job_paths(repo_root, JOB_SOURCE)
 

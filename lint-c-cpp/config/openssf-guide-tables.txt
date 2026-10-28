@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright (C) 2026 Nero Duality, LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Snapshot of the OpenSSF Compiler Options Hardening Guide, Table 1
+# ("Recommended compiler options that enable strictly compile-time checks")
+# followed by Table 2 ("Recommended compiler options that enable run-time
+# protection mechanisms"), normalized to the kit's token vocabulary (`LINKER:`
+# prefix for `-Wl,` options; defs without `-D`).
+#
+#   Source: https://best.openssf.org/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C++.html
+#   Guide date: 2026-08-20
+#
+# lint_self_test asserts every token here is in the manifest's coverage.flags
+# (or coverage.definitions for `def:` rows). Refresh this file when the guide
+# changes; a new upstream row then fails the self-test until the manifest and
+# cmake wiring cover it or an explicit `skip:` line records why not.
+#
+# Line forms:  <flag>            required in coverage.flags
+#              def:<DEFINITION>  required in coverage.definitions
+#              skip:<token>  # reason
+
+# Table 1: compile-time checks
+-Wall
+-Wextra
+-Wformat
+-Wformat=2
+-Wconversion
+-Wsign-conversion
+-Wtrampolines
+-Wimplicit-fallthrough
+-Wbidi-chars=any
+-Werror
+-Werror=format-security
+-Werror=implicit
+-Werror=incompatible-pointer-types
+-Werror=int-conversion
+
+# Table 2: run-time protection mechanisms
+-D_FORTIFY_SOURCE=3
+def:_GLIBCXX_ASSERTIONS
+def:_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
+-fstrict-flex-arrays=3
+-fstack-clash-protection
+-fstack-protector-strong
+-fcf-protection=full
+-mbranch-protection=standard
+-fzero-call-used-regs=used-gpr
+LINKER:-z,nodlopen
+LINKER:-z,noexecstack
+LINKER:-z,relro
+LINKER:-z,now
+-fPIE
+-pie
+-fPIC
+-shared
+-fno-delete-null-pointer-checks
+-fno-strict-overflow
+-fno-strict-aliasing
+-ftrivial-auto-var-init=zero
+-fexceptions
+-fhardened
+LINKER:--as-needed
+LINKER:--no-copy-dt-needed-entries
+# Guide table spells the next flag "union". GCC accepts "unions" (the spelling
+# in the guide's synopsis); "union" is not a valid argument and is never emitted.
+-fzero-init-padding-bits=unions
+-fzero-init-padding-bits=all

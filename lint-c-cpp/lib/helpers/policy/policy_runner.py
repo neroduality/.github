@@ -29,7 +29,7 @@ _POLICY_DIR = Path(__file__).resolve().parent
 _LINT_LIB = _POLICY_DIR.parents[1]
 if str(_LINT_LIB) not in sys.path:
     sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath
+from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
 
 _bootstrap_lint_pythonpath()
 for _core_sub in ("manifest", "scan", "tools", "workflow"):
@@ -39,11 +39,11 @@ for _core_sub in ("manifest", "scan", "tools", "workflow"):
 if str(_POLICY_DIR) not in sys.path:
     sys.path.insert(0, str(_POLICY_DIR))
 
-from consumer_manifest import resolve_scan_paths
-from policy_config import PolicyConfig
-from policy_prepare import build_config, prepare_paths
-from policy_self_test import run as run_policy_self_test
-from scan_policy import (
+from consumer_manifest import resolve_scan_paths  # noqa: E402
+from policy_config import PolicyConfig  # noqa: E402
+from policy_prepare import build_config, prepare_paths  # noqa: E402
+from policy_self_test import run as run_policy_self_test  # noqa: E402
+from scan_policy import (  # noqa: E402
     JOB_LICENSE,
     JOB_NOLINT,
     JOB_SOURCE,
@@ -95,13 +95,14 @@ def _resolve_paths(args: argparse.Namespace) -> list[Path]:
         job = SCRIPT_SCAN_JOBS.get(Path(args.script).name)
         if job is None:
             raise SystemExit(
-                f"error: no scan job for {args.script!r} "
-                "(pass --scan-job or --paths-file)"
+                f"error: no scan job for {args.script!r} (pass --scan-job or --paths-file)"
             )
     return resolve_scan_paths(job, repo_root=repo_root)
 
 
-def _run_lint(module: ModuleType, config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
+def _run_lint(
+    module: ModuleType, config: PolicyConfig, paths: list[Path], extras: list[str]
+) -> int:
     if hasattr(module, "run"):
         return int(module.run(config, paths, extras))
 
@@ -130,7 +131,9 @@ def _run_lint(module: ModuleType, config: PolicyConfig, paths: list[Path], extra
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--script", required=True, help="Policy linter basename (e.g. banned_cxx_heap.py)")
+    parser.add_argument(
+        "--script", required=True, help="Policy linter basename (e.g. banned_cxx_heap.py)"
+    )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument(
         "--paths-file",

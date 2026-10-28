@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from policy_config import K_HEADER, K_MAGIC_SHARED, K_STACK_ARRAY, K_TU, PolicyConfig
-from scan_policy import strip_comments_and_strings
 
 LINT_TITLE = "constant placement/bounds policy"
 LINT_FIX_HINT = (
@@ -34,9 +33,7 @@ LINT_FIX_HINT = (
     "here (shared caps in canonical headers, file-local caps at the top of the .c/.cpp)."
 )
 
-STACK_ARRAY_DECL_RE = re.compile(
-    r"\b(?:char|uint8_t|unsigned char)\s+(\w+)\s*\[\s*(\d+)u?\s*\]"
-)
+STACK_ARRAY_DECL_RE = re.compile(r"\b(?:char|uint8_t|unsigned char)\s+(\w+)\s*\[\s*(\d+)u?\s*\]")
 CONTROL_CALL_NAMES = frozenset(
     {
         "catch",
@@ -160,6 +157,16 @@ def _anonymous_enum_body_line_set(text: str) -> frozenset[int]:
     return frozenset(lines)
 
 
+def _source_lines(text: str) -> list[str]:
+    """Split on ``\\n`` only.
+
+    ``str.splitlines`` also breaks on ``\\f``, ``\\v`` and U+2028. A mask that
+    keeps those characters would no longer line up with the raw text, and the
+    reported line number would be wrong.
+    """
+    return text.split("\n")
+
+
 def _literal_value(token: str) -> int:
     base = token.rstrip("uUlLzZ")
     return int(base, 16) if base[:2].lower() == "0x" else int(base)
@@ -192,8 +199,8 @@ def _format_macro_literal_issue(hit: LiteralHit) -> str:
 def scan_clang_tidy_gap_literals(text: str, label: str) -> list[str]:
     """Flag numeric literals in format/printf attribute macro arguments only."""
     blanked = _blank_all_comments(text)
-    raw_lines = text.splitlines()
-    code_lines = blanked.splitlines()
+    raw_lines = _source_lines(text)
+    code_lines = _source_lines(blanked)
     if len(code_lines) < len(raw_lines):
         code_lines.extend([""] * (len(raw_lines) - len(code_lines)))
     enum_lines = _enum_body_line_set(text)
@@ -378,7 +385,7 @@ def scan_naked_stack_arrays(path: Path, config: PolicyConfig) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="replace")
     for i, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
+        if stripped.startswith(("//", "*", "/*")):
             continue
         code = strip_comments_and_strings(line)
         for _name, size_s in STACK_ARRAY_DECL_RE.findall(code):
@@ -416,9 +423,9 @@ def scan_direct_recursion(path: Path, config: PolicyConfig) -> list[str]:
 
     bounded_annotation = config.bounded_recursion_annotation
     raw_text = path.read_text(encoding="utf-8", errors="replace")
-    raw_lines = raw_text.splitlines()
+    raw_lines = _source_lines(raw_text)
     code_text = strip_block_comments_preserve_lines(raw_text)
-    code_lines = [strip_comments_and_strings(line) for line in code_text.splitlines()]
+    code_lines = [strip_comments_and_strings(line) for line in _source_lines(code_text)]
     issues: list[str] = []
     index = 0
     signature_parts: list[str] = []
@@ -505,100 +512,102 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 
 
 _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
-        "bad_type4.cpp": (
-            "void f(){ uint16_t c = 240; (void)c; }\n",
-            set(),
-        ),
-        "good_type4.cpp": (
-            '#include "sample/limits.h"\n'
-            "void f(){ uint16_t c = SAMPLE_PAYLOAD_MAX; (void)c; }\n",
-            set(),
-        ),
-        "local_define.cpp": (
-            "#define CHUNK_MAX 240u\nvoid f(){ uint8_t n = CHUNK_MAX; (void)n; }\n",
-            set(),
-        ),
-        "limit_test.c": (
-            "void t(void){ (void)SAMPLE_PAYLOAD_MAX; }\n",
-            set(),
-        ),
-        "bad_test_literal.c": (
-            "void t(void){ unsigned sentinel = 0xAAu; (void)sentinel; }\n",
-            set(),
-        ),
-        "bad_stack.cpp": (
-            "void f(){ char vcard[400]; vcard[0]=0; (void)vcard; }\n",
-            {"bad_stack.cpp"},
-        ),
-        "good_stack.cpp": (
-            '#include "sample/limits.h"\n'
-            "void f(){ char line[SAMPLE_JSONL_LINE_MAX]; line[0]=0; (void)line; }\n",
-            set(),
-        ),
-        "bad_recursion.cpp": (
-            "static bool walk(unsigned depth) { return depth == 0u ? true : walk(depth - 1u); }\n",
-            {"bad_recursion.cpp"},
-        ),
-        "good_loop.cpp": (
-            "void loop(void) { poll_one_cycle(); }\n",
-            set(),
-        ),
-        "bad_loop_bound.cpp": (
-            "void scan(void) { for (int depth = 0; depth < 8; ++depth) { step(); } }\n",
-            set(),
-        ),
-        "good_loop_bound.cpp": (
-            "enum { SCAN_DEPTH_MAX = 8u }; void scan(void) { for (int depth = 0; depth < SCAN_DEPTH_MAX; ++depth) { step(); } }\n",
-            set(),
-        ),
-        "good_bounded_recursion.cpp": (
-            "static bool walk(unsigned depth) { /* SAMPLE_BOUNDED_RECURSION max depth: 2 */ return depth == 0u ? true : walk(depth - 1u); }\n",
-            set(),
-        ),
-        "bad_plain_decimal.cpp": (
-            "int f(int x){ if (x <= 225) { return 42; } return 0; }\n",
-            set(),
-        ),
-        "bad_hex.cpp": (
-            "void g(void){ uint8_t c = 0xFFu; (void)c; }\n",
-            set(),
-        ),
-        "good_constexpr.cpp": (
-            "static constexpr unsigned kValue = 0x22u;\nvoid f(void){ (void)kValue; }\n",
-            set(),
-        ),
-        "identity_literals_ok.cpp": (
-            "void f(int x){ if (x <= 0) { (void)x; } if (x == 1u) { return; } }\n",
-            set(),
-        ),
-        "comments_strings_ok.cpp": (
-            'void f(void){ const char *s = "240 0xFF"; /* 400 */ (void)s; }\n',
-            set(),
-        ),
-        "single_use_header_cap.h": (
-            "#define SAMPLE_LOCAL_HEADER_CAP 7u\n",
-            {"single_use_header_cap.h"},
-        ),
-        "uses_single_header.cpp": (
-            '#include "single_use_header_cap.h"\nint f(void){ return SAMPLE_LOCAL_HEADER_CAP; }\n',
-            set(),
-        ),
-        "shared_header_cap.h": (
-            "#define SAMPLE_SHARED_HEADER_CAP 8u\n",
-            set(),
-        ),
-        "uses_shared_header_a.cpp": (
-            '#include "shared_header_cap.h"\nint a(void){ return SAMPLE_SHARED_HEADER_CAP; }\n',
-            set(),
-        ),
-        "uses_shared_header_b.cpp": (
-            '#include "shared_header_cap.h"\nint b(void){ return SAMPLE_SHARED_HEADER_CAP; }\n',
-            set(),
-        ),
-        "bad_printf_indices.h": (
-            "SAMPLE_PRINTF(4, 5)\nbool sample_appendf(char *buf, size_t cap, size_t *off, const char *fmt, ...);\n",
-            {"bad_printf_indices.h"},
-        ),
+    "bad_type4.cpp": (
+        "void f(){ uint16_t c = 240; (void)c; }\n",
+        set(),
+    ),
+    "good_type4.cpp": (
+        '#include "sample/limits.h"\nvoid f(){ uint16_t c = SAMPLE_PAYLOAD_MAX; (void)c; }\n',
+        set(),
+    ),
+    "local_define.cpp": (
+        "#define CHUNK_MAX 240u\nvoid f(){ uint8_t n = CHUNK_MAX; (void)n; }\n",
+        set(),
+    ),
+    "limit_test.c": (
+        "void t(void){ (void)SAMPLE_PAYLOAD_MAX; }\n",
+        set(),
+    ),
+    "bad_test_literal.c": (
+        "void t(void){ unsigned sentinel = 0xAAu; (void)sentinel; }\n",
+        set(),
+    ),
+    "bad_stack.cpp": (
+        "void f(){ char vcard[400]; vcard[0]=0; (void)vcard; }\n",
+        {"bad_stack.cpp"},
+    ),
+    "good_stack.cpp": (
+        '#include "sample/limits.h"\n'
+        "void f(){ char line[SAMPLE_JSONL_LINE_MAX]; line[0]=0; (void)line; }\n",
+        set(),
+    ),
+    "bad_recursion.cpp": (
+        "static bool walk(unsigned depth) { return depth == 0u ? true : walk(depth - 1u); }\n",
+        {"bad_recursion.cpp"},
+    ),
+    "good_loop.cpp": (
+        "void loop(void) { poll_one_cycle(); }\n",
+        set(),
+    ),
+    "bad_loop_bound.cpp": (
+        "void scan(void) { for (int depth = 0; depth < 8; ++depth) { step(); } }\n",
+        set(),
+    ),
+    "good_loop_bound.cpp": (
+        "enum { SCAN_DEPTH_MAX = 8u }; void scan(void) { for (int depth = 0; depth < "
+        "SCAN_DEPTH_MAX; ++depth) { step(); } }\n",
+        set(),
+    ),
+    "good_bounded_recursion.cpp": (
+        "static bool walk(unsigned depth) { /* SAMPLE_BOUNDED_RECURSION max depth: 2 */ return "
+        "depth == 0u ? true : walk(depth - 1u); }\n",
+        set(),
+    ),
+    "bad_plain_decimal.cpp": (
+        "int f(int x){ if (x <= 225) { return 42; } return 0; }\n",
+        set(),
+    ),
+    "bad_hex.cpp": (
+        "void g(void){ uint8_t c = 0xFFu; (void)c; }\n",
+        set(),
+    ),
+    "good_constexpr.cpp": (
+        "static constexpr unsigned kValue = 0x22u;\nvoid f(void){ (void)kValue; }\n",
+        set(),
+    ),
+    "identity_literals_ok.cpp": (
+        "void f(int x){ if (x <= 0) { (void)x; } if (x == 1u) { return; } }\n",
+        set(),
+    ),
+    "comments_strings_ok.cpp": (
+        'void f(void){ const char *s = "240 0xFF"; /* 400 */ (void)s; }\n',
+        set(),
+    ),
+    "single_use_header_cap.h": (
+        "#define SAMPLE_LOCAL_HEADER_CAP 7u\n",
+        {"single_use_header_cap.h"},
+    ),
+    "uses_single_header.cpp": (
+        '#include "single_use_header_cap.h"\nint f(void){ return SAMPLE_LOCAL_HEADER_CAP; }\n',
+        set(),
+    ),
+    "shared_header_cap.h": (
+        "#define SAMPLE_SHARED_HEADER_CAP 8u\n",
+        set(),
+    ),
+    "uses_shared_header_a.cpp": (
+        '#include "shared_header_cap.h"\nint a(void){ return SAMPLE_SHARED_HEADER_CAP; }\n',
+        set(),
+    ),
+    "uses_shared_header_b.cpp": (
+        '#include "shared_header_cap.h"\nint b(void){ return SAMPLE_SHARED_HEADER_CAP; }\n',
+        set(),
+    ),
+    "bad_printf_indices.h": (
+        "SAMPLE_PRINTF(4, 5)\nbool sample_appendf(char *buf, size_t cap, size_t *off, const char "
+        "*fmt, ...);\n",
+        {"bad_printf_indices.h"},
+    ),
 }
 
 
@@ -609,9 +618,11 @@ def prepare_self_test_repo(root: Path) -> None:
     tests.mkdir(parents=True)
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core, include, userspace, tests]\n"
-        "policy:\n  unsafe_api:\n    header: sample_null.h\n    include_headers: [attrs.h, mem_util.h]\n"
+        "policy:\n  unsafe_api:\n    header: sample_null.h\n"
+        "    include_headers: [attrs.h, mem_util.h]\n"
         "  constants_headers: [limits.h, board_config.h, config.h]\n",
         encoding="utf-8",
     )
@@ -624,13 +635,12 @@ def prepare_self_test_repo(root: Path) -> None:
     for name, (content, _) in _SELF_TEST_CASES.items():
         if name in {"limit_test.c", "bad_test_literal.c"}:
             continue
-        if name.endswith(".h"):
-            target = root / "include" / "sample" / name
-        else:
-            target = core / name
+        target = root / "include" / "sample" / name if name.endswith(".h") else core / name
         target.write_text(content, encoding="utf-8")
     (tests / "test_limits.c").write_text(_SELF_TEST_CASES["limit_test.c"][0], encoding="utf-8")
-    (tests / "bad_test_literal.c").write_text(_SELF_TEST_CASES["bad_test_literal.c"][0], encoding="utf-8")
+    (tests / "bad_test_literal.c").write_text(
+        _SELF_TEST_CASES["bad_test_literal.c"][0], encoding="utf-8"
+    )
 
 
 def verify_self_test(errors: list[str]) -> int:
@@ -649,4 +659,3 @@ def verify_self_test(errors: list[str]) -> int:
         return 1
     print("constant placement self-test: OK")
     return 0
-

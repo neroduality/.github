@@ -48,5 +48,7 @@ tools:
     min: "0.14.2"
   shellcheck:
     min: "0.9.0"
+  # 3.7 and 3.14 format "((!" differently. Scripts use "((x == 0))" and lint
+  # rejects "((!" so either shfmt in this range leaves the tree unchanged.
   shfmt:
     min: "3.0.0"

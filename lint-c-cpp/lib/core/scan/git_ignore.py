@@ -63,7 +63,7 @@ def _gitignore_dir_basename_patterns(repo_root: Path) -> frozenset[str]:
         return frozenset(names)
     for raw in gitignore.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("!"):
+        if not line or line.startswith(("#", "!")):
             continue
         if not line.endswith("/"):
             continue
@@ -91,9 +91,7 @@ def _parse_check_ignore_stdout(raw: bytes) -> frozenset[str]:
 
 def _basename_fallback_ignored(repo_root: Path, rel_paths: list[str]) -> frozenset[str]:
     patterns = _gitignore_dir_basename_patterns(repo_root)
-    return frozenset(
-        rel for rel in rel_paths if _path_matches_dir_basename_skip(rel, patterns)
-    )
+    return frozenset(rel for rel in rel_paths if _path_matches_dir_basename_skip(rel, patterns))
 
 
 def paths_gitignored(repo_root: Path, rel_paths: list[str]) -> frozenset[str]:
@@ -148,7 +146,7 @@ def drop_gitignored_paths(repo_root: Path, paths: list[Path]) -> list[Path]:
     ignored = paths_gitignored(repo_root, rels)
     if not ignored:
         return paths
-    return [path for path, rel in zip(paths, rels) if rel not in ignored]
+    return [path for path, rel in zip(paths, rels, strict=True) if rel not in ignored]
 
 
 def run_self_test() -> int:

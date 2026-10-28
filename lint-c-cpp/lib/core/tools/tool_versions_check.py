@@ -16,6 +16,7 @@
 # limitations under the License.
 
 """Verify host lint tools for the org C/C++ lint kit (always strict)."""
+
 from __future__ import annotations
 
 import argparse
@@ -66,7 +67,8 @@ def _load_tools() -> dict:
     unknown = sorted(key for key in data if key != "tools")
     if unknown:
         raise SystemExit(
-            f"error: {_MANIFEST.name}: unknown top-level keys: {', '.join(unknown)} (allowed: tools)"
+            f"error: {_MANIFEST.name}: unknown top-level keys: {', '.join(unknown)} (allowed: "
+            "tools)"
         )
     tools = data.get("tools")
     if not isinstance(tools, dict):
@@ -166,8 +168,8 @@ def probe_version(tool_key: str, binary: str) -> str | None:
             blob = Path(binary).read_bytes()
         except OSError:
             return None
-        match = re.search(rb"mvdan\.cc/sh/v3/version=(\d+\.\d+(?:\.\d+)*)", blob)
-        return match.group(1).decode("ascii") if match else None
+        blob_match = re.search(rb"mvdan\.cc/sh/v3/version=(\d+\.\d+(?:\.\d+)*)", blob)
+        return blob_match.group(1).decode("ascii") if blob_match else None
     if tool_key in {"clang_format", "clang_tidy"}:
         result = _run([binary, "--version"])
         if result.returncode != 0:
@@ -209,14 +211,15 @@ def verify_tool(tool_key: str, spec: dict) -> list[ToolIssue]:
 
     if tool_key == "node":
         if int(have) < int(parse_version(want)[0]):
-            issues.append(
-                ToolIssue(tool_key, f"node {have} < required {want} ({_MANIFEST.name})")
-            )
+            issues.append(ToolIssue(tool_key, f"node {have} < required {want} ({_MANIFEST.name})"))
         return issues
 
     if not version_ge(have, want):
         issues.append(
-            ToolIssue(tool_key, f"{tool_key.replace('_', '-')} {have} < required {want} ({_MANIFEST.name})")
+            ToolIssue(
+                tool_key,
+                f"{tool_key.replace('_', '-')} {have} < required {want} ({_MANIFEST.name})",
+            )
         )
         return issues
 
@@ -304,8 +307,7 @@ def run_self_test() -> int:
             [sys.executable, str(Path(__file__).resolve()), "verify"],
             check=False,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             env=env,
         )
         if result.returncode == 0:
@@ -326,7 +328,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true", help="Run internal regression checks")
     sub = parser.add_subparsers(dest="cmd")
-    verify_parser = sub.add_parser("verify", help="Fail unless every required tool is present and new enough")
+    verify_parser = sub.add_parser(
+        "verify", help="Fail unless every required tool is present and new enough"
+    )
     verify_parser.add_argument(
         "--workflow",
         action="store_true",

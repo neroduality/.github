@@ -23,7 +23,7 @@ _lint_env_init() {
   lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
   default_root="$(cd -- "${lib_dir}/.." && pwd)"
   export LINT_KIT="${LINT_KIT:-${default_root}}"
-  repo_root="${LINT_REPO_ROOT:-${FIRMWARE_ROOT:-${NERO_LINT_REPO_ROOT:-$(pwd)}}}"
+  repo_root="${LINT_REPO_ROOT:-$(pwd)}"
   repo_root="$(cd -- "${repo_root}" && pwd)"
   export LINT_REPO_ROOT="$repo_root"
   pythonpath="${LINT_KIT}/lib/core/manifest"

@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 
 from consumer_manifest import (
-    load as load_lint_manifest,
     manifest_path,
     policy_block,
     project_prefix,
@@ -43,9 +42,7 @@ from consumer_manifest import (
 
 # Policy / tidy / OpenSSF / format TUs and headers. Arduino ``.ino`` is not a
 # normal translation unit here -- only license headers + codespell (see profiles).
-SOURCE_SUFFIXES = frozenset(
-    {".h", ".hh", ".hpp", ".hxx", ".c", ".cc", ".cpp", ".cxx"}
-)
+SOURCE_SUFFIXES = frozenset({".h", ".hh", ".hpp", ".hxx", ".c", ".cc", ".cpp", ".cxx"})
 INO_SUFFIX = ".ino"
 
 # --- Central scan job profiles (single registry) ---
@@ -62,23 +59,65 @@ JOB_LICENSE = "license"
 JOB_CMAKE = "cmake"
 JOB_PYTHON = "python"
 
-_CODESPELL_SUFFIXES = SOURCE_SUFFIXES | frozenset(
-    {INO_SUFFIX, ".md", ".yaml", ".yml"}
-)
+_CODESPELL_SUFFIXES = SOURCE_SUFFIXES | frozenset({INO_SUFFIX, ".md", ".yaml", ".yml"})
 _FORMAT_C_SUFFIXES = SOURCE_SUFFIXES
 
 _SCAN_JOB_PROFILES: dict[str, dict[str, object]] = {
-    JOB_SOURCE: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": SOURCE_SUFFIXES},
-    JOB_UNSAFE_API: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": SOURCE_SUFFIXES},
-    JOB_NOLINT: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": True, "suffixes": SOURCE_SUFFIXES},
-    JOB_MARKDOWN: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": frozenset({".md"})},
-    JOB_FORMAT_C: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": _FORMAT_C_SUFFIXES},
-    JOB_YAML: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": frozenset({".yaml", ".yml"})},
-    JOB_SHELL: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": frozenset({".sh"})},
-    JOB_ALL_FILES: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": None},
-    JOB_CODESPELL: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": _CODESPELL_SUFFIXES},
-    JOB_LICENSE: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": None},
-    JOB_PYTHON: {"exclude_unsafe_wrappers": False, "exclude_nolint_allowed": False, "suffixes": frozenset({".py"})},
+    JOB_SOURCE: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": SOURCE_SUFFIXES,
+    },
+    JOB_UNSAFE_API: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": SOURCE_SUFFIXES,
+    },
+    JOB_NOLINT: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": True,
+        "suffixes": SOURCE_SUFFIXES,
+    },
+    JOB_MARKDOWN: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": frozenset({".md"}),
+    },
+    JOB_FORMAT_C: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": _FORMAT_C_SUFFIXES,
+    },
+    JOB_YAML: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": frozenset({".yaml", ".yml"}),
+    },
+    JOB_SHELL: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": frozenset({".sh"}),
+    },
+    JOB_ALL_FILES: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": None,
+    },
+    JOB_CODESPELL: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": _CODESPELL_SUFFIXES,
+    },
+    JOB_LICENSE: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": None,
+    },
+    JOB_PYTHON: {
+        "exclude_unsafe_wrappers": False,
+        "exclude_nolint_allowed": False,
+        "suffixes": frozenset({".py"}),
+    },
 }
 
 # Whole-repo walks (respecting VCS/gitignore dir skips), not limited to scan.source_roots.
@@ -107,9 +146,7 @@ UNSAFE_API_SCAN_STEPS = frozenset(
 
 # bugprone-unsafe-functions targets in the unsafe-api clang-tidy pass. The output
 # filter waives only intentional non-heap wrapper diagnostics, not whole files.
-CLANG_TIDY_UNSAFE_FUNCTIONS = frozenset(
-    {"strcpy", "strcat", "sprintf", "vsprintf", "gets"}
-)
+CLANG_TIDY_UNSAFE_FUNCTIONS = frozenset({"strcpy", "strcat", "sprintf", "vsprintf", "gets"})
 
 BANNED_OUTPUT_C_API_NAMES = frozenset(
     {
@@ -254,7 +291,7 @@ def canonical_bounds_headers(repo_root: Path) -> frozenset[str]:
 
 def magic_literal_constants_header_basenames(repo_root: Path) -> frozenset[str]:
     index = canonical_index_files(repo_root)
-    headers = {name for name in index if name.endswith((".h", ".hpp"))}
+    headers = frozenset(name for name in index if name.endswith((".h", ".hpp")))
     return headers | canonical_bounds_headers(repo_root)
 
 
@@ -367,7 +404,11 @@ def tests_path_prefixes(repo_root: Path) -> tuple[str, ...]:
     """Directories treated as test trees for bounds/hardening policy."""
     raw_list = _bounds(repo_root).get("tests_path_prefixes")
     if isinstance(raw_list, list) and raw_list:
-        return tuple(_normalize_root_prefix(str(item).rstrip("/")) for item in raw_list if isinstance(item, str))
+        return tuple(
+            _normalize_root_prefix(str(item).rstrip("/"))
+            for item in raw_list
+            if isinstance(item, str)
+        )
     raw = _bounds(repo_root).get("tests_path_prefix")
     if isinstance(raw, str) and raw.strip():
         return (_normalize_root_prefix(raw.strip().rstrip("/")),)
@@ -379,13 +420,13 @@ def tests_path_prefixes(repo_root: Path) -> tuple[str, ...]:
 
 
 def _discovered_module_index_files(repo_root: Path) -> frozenset[str]:
-    """Driver .c/.h pairs: headers under public_headers_dir with a matching .c anywhere in scan scope."""
+    """Driver .c/.h pairs: headers under public_headers_dir with a matching .c anywhere
+    in scan scope."""
     header_dir = repo_root / public_headers_dir(repo_root)
     if not header_dir.is_dir():
         return frozenset()
     c_stems = {
-        path.stem
-        for path in iter_job_paths(repo_root, JOB_SOURCE, suffixes=frozenset({".c"}))
+        path.stem for path in iter_job_paths(repo_root, JOB_SOURCE, suffixes=frozenset({".c"}))
     }
     names: set[str] = set()
     for header in header_dir.glob("*.h"):
@@ -444,9 +485,7 @@ def unsafe_wrapper_rel_paths(repo_root: Path) -> frozenset[str]:
     raw = block.get("wrapper_files")
     if isinstance(raw, list) and raw:
         return frozenset(
-            _normalize_repo_rel_path(item)
-            for item in raw
-            if isinstance(item, str) and item.strip()
+            _normalize_repo_rel_path(item) for item in raw if isinstance(item, str) and item.strip()
         )
     return frozenset()
 
@@ -466,9 +505,7 @@ def nolint_allowed_rel_paths(repo_root: Path) -> frozenset[str]:
     if not isinstance(raw, list) or not raw:
         return frozenset()
     return frozenset(
-        _normalize_repo_rel_path(item)
-        for item in raw
-        if isinstance(item, str) and item.strip()
+        _normalize_repo_rel_path(item) for item in raw if isinstance(item, str) and item.strip()
     )
 
 
@@ -683,6 +720,11 @@ def _walk_scoped_paths(
     return sorted(paths)
 
 
+def _profile_suffixes(profile: dict[str, object]) -> frozenset[str] | None:
+    raw = profile.get("suffixes")
+    return raw if isinstance(raw, frozenset) else None
+
+
 def scan_job_profile(job: str) -> dict[str, object]:
     try:
         return _SCAN_JOB_PROFILES[job]
@@ -724,7 +766,7 @@ def iter_job_paths(
         return iter_cmake_lists_under_scan_scope(repo_root)
 
     profile = scan_job_profile(job)
-    effective_suffixes = suffixes if suffixes is not None else profile["suffixes"]  # type: ignore[assignment]
+    effective_suffixes = suffixes if suffixes is not None else _profile_suffixes(profile)
     if job in _REPO_WIDE_SCAN_JOBS:
         paths = _walk_repo_wide_paths(repo_root, suffixes=effective_suffixes)
     else:
@@ -733,26 +775,18 @@ def iter_job_paths(
         wrappers = unsafe_wrapper_rel_paths(repo_root)
         if wrappers:
             paths = [
-                path
-                for path in paths
-                if path.relative_to(repo_root).as_posix() not in wrappers
+                path for path in paths if path.relative_to(repo_root).as_posix() not in wrappers
             ]
     if profile.get("exclude_nolint_allowed"):
         allowed = nolint_allowed_rel_paths(repo_root)
         if allowed:
             paths = [
-                path
-                for path in paths
-                if path.relative_to(repo_root).as_posix() not in allowed
+                path for path in paths if path.relative_to(repo_root).as_posix() not in allowed
             ]
     if job == JOB_LICENSE:
         paths = [path for path in paths if license_header_classify(path) is not None]
         # Dialed/kit-generated OpenSSF cmake: fail-on-change rewrite keeps them in sync.
-        paths = [
-            path
-            for path in paths
-            if not _is_generated_openssf_cmake_module(path, repo_root)
-        ]
+        paths = [path for path in paths if not _is_generated_openssf_cmake_module(path, repo_root)]
     return paths
 
 
@@ -841,12 +875,9 @@ def path_in_scan_scope(rel: Path | str, repo_root: Path) -> bool:
 
     if git_repo_available(repo_root):
         return not path_gitignored(repo_root, rel_posix)
-    if any(
-        _dir_name_skipped(part, scan_walk_skip_dir_names(repo_root))
-        for part in rel_path.parts
-    ):
-        return False
-    return True
+    return not any(
+        _dir_name_skipped(part, scan_walk_skip_dir_names(repo_root)) for part in rel_path.parts
+    )
 
 
 def bootstrap_scan_manifest(
@@ -862,7 +893,7 @@ def bootstrap_scan_manifest(
         try:
             import yaml
         except ImportError:
-            yaml = None  # type: ignore[assignment]
+            yaml = None
         if yaml is not None:
             data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
             if not isinstance(data, dict):
@@ -925,8 +956,8 @@ def scan_scope_summary(repo_root: Path) -> dict[str, object]:
                 "exclude_unsafe_wrappers": bool(profile.get("exclude_unsafe_wrappers")),
                 "exclude_nolint_allowed": bool(profile.get("exclude_nolint_allowed")),
                 "suffixes": (
-                    sorted(profile["suffixes"])  # type: ignore[arg-type]
-                    if profile.get("suffixes") is not None
+                    sorted(job_suffixes)
+                    if (job_suffixes := _profile_suffixes(profile)) is not None
                     else None
                 ),
             }

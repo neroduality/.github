@@ -35,10 +35,28 @@ _LINT_LIB = Path(__file__).resolve().parents[2]
 _DEFAULT_LINT_KIT = _LINT_LIB.parent
 if str(_LINT_LIB) not in sys.path:
     sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath
+from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
 
 _bootstrap_lint_pythonpath()
-from consumer_manifest import (
+from compile_db_util import (  # noqa: E402
+    MergedCompileDatabase,
+    assert_compile_db_entries_in_scan_scope,
+    clang_target_for_command,
+    cmake_generator,
+    compile_db_input_stats,
+    compile_driver_path,
+    compile_entry_preference,
+    compile_file_repo_rel,
+    compiler_target_triple,
+    count_cc_paths_by_scan_source_root,
+    entry_command,
+    format_source_root_entry_counts,
+    host_target_triple,
+    is_cross_compile_command,
+    load_richest_compile_entries,
+    verify_required_compile_commands,
+)
+from consumer_manifest import (  # noqa: E402
     clang_tidy_header_filter_regex,
     clang_tidy_header_filter_regex_for_overlay,
     clang_tidy_merge_build_dir,
@@ -54,7 +72,8 @@ from consumer_manifest import (
     resolve_scan_paths,
     verify_compile_db_cmake_coverage,
 )
-from scan_policy import (
+from repo_paths import source_key  # noqa: E402
+from scan_policy import (  # noqa: E402
     JOB_SOURCE,
     JOB_UNSAFE_API,
     SOURCE_SUFFIXES,
@@ -62,27 +81,6 @@ from scan_policy import (
     path_in_scan_scope,
     read_paths_file,
 )
-from compile_db_util import (
-    MergedCompileDatabase,
-    assert_compile_db_entries_in_scan_scope,
-    cmake_generator,
-    clang_target_for_command,
-    compile_db_index_keys,
-    compile_db_input_stats,
-    compile_driver_path,
-    compile_entry_preference,
-    compile_file_repo_rel,
-    compiler_target_triple,
-    count_cc_paths_by_scan_source_root,
-    entry_command,
-    format_source_root_entry_counts,
-    host_target_triple,
-    is_cross_compile_command,
-    load_richest_compile_entries,
-    verify_required_compile_commands,
-)
-from repo_paths import source_key
-
 
 _CONTAINER_PATH_PREFIXES = ("/src/", "/workspace/")
 _FIRMWARE_COMPILE_DB_LABEL = "firmware compile"
@@ -114,10 +112,7 @@ CLANG_TIDY_INPUT_SUFFIXES = frozenset({".c", ".cpp", ".cc", ".cxx"})
 
 def clang_tidy_input_targets(scan_paths: list[Path]) -> list[Path]:
     """Sorted paths passed as clang-tidy argv (TUs only; headers via HeaderFilterRegex)."""
-    return sorted(
-        path for path in scan_paths
-        if path.suffix.lower() in CLANG_TIDY_INPUT_SUFFIXES
-    )
+    return sorted(path for path in scan_paths if path.suffix.lower() in CLANG_TIDY_INPUT_SUFFIXES)
 
 
 def _rewrite_missing_abs_path(path_str: str, response_file: Path) -> str:
@@ -198,9 +193,7 @@ def _expand_at_response_tokens(tokens: list[str]) -> list[str]:
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
-            nested.extend(
-                _repair_response_token(part, path) for part in shlex.split(stripped)
-            )
+            nested.extend(_repair_response_token(part, path) for part in shlex.split(stripped))
         out.extend(_expand_at_response_tokens(nested))
     return out
 
@@ -348,9 +341,7 @@ def _template_for_target(
             return existing
     rel = _target_repo_rel(target, repo_root)
     same_dir = [
-        entry
-        for key, entry in by_file.items()
-        if Path(key).parent == (rel or Path()).parent
+        entry for key, entry in by_file.items() if Path(key).parent == (rel or Path()).parent
     ]
     # Firmware scan roots must inherit a cross/arduino template. Host unit-test compile
     # entries often share the same directory (tests compile firmware/*.cpp on the host) and
@@ -358,9 +349,7 @@ def _template_for_target(
     # synthesized firmware headers/TUs without Arduino.h / board -D defines.
     if _target_prefers_firmware_template(target, repo_root) and cross_templates:
         same_dir_cross = [
-            entry
-            for entry in same_dir
-            if is_cross_compile_command(entry_command(entry))
+            entry for entry in same_dir if is_cross_compile_command(entry_command(entry))
         ]
         if same_dir_cross:
             return min(same_dir_cross, key=compile_entry_preference)
@@ -479,9 +468,7 @@ def _compile_entry_for_cppcheck(
         if define_flags:
             tokens = shlex.split(synthesized["command"])
             if tokens:
-                synthesized["command"] = shlex.join(
-                    [tokens[0], *define_flags, *tokens[1:]]
-                )
+                synthesized["command"] = shlex.join([tokens[0], *define_flags, *tokens[1:]])
         return public_compile_entry(synthesized)
     return public_compile_entry(dict(entry))
 
@@ -565,8 +552,7 @@ def ensure_firmware_compile_commands(repo_root: Path) -> int:
         built_paths += 1
 
     print(
-        f"compile database: {_FIRMWARE_COMPILE_DB_LABEL} OK "
-        f"({built_paths} compile_commands.json)",
+        f"compile database: {_FIRMWARE_COMPILE_DB_LABEL} OK ({built_paths} compile_commands.json)",
         flush=True,
     )
     return 0
@@ -651,7 +637,10 @@ def complete_compile_commands_for_scan_roots(
     host_templates: tuple[dict, ...] | None = None,
     cross_templates: tuple[dict, ...] | None = None,
 ) -> int:
-    """Ensure every scan.source_roots file has a compile_commands entry. Returns synthesize count."""
+    """Ensure every scan.source_roots file has a compile_commands entry.
+
+    Returns the synthesize count.
+    """
     repo_root = repo_root.resolve()
     load(repo_root)
     if host_templates is None:
@@ -685,7 +674,9 @@ CXX_SOURCE_SUFFIXES = frozenset({".cpp", ".hpp", ".cc", ".cxx", ".hh", ".hxx"})
 def _overlay_source_suffixes(overlay: dict) -> frozenset[str] | None:
     raw = overlay.get("suffixes")
     if isinstance(raw, list) and raw:
-        return frozenset(str(item) for item in raw if isinstance(item, str) and str(item).startswith("."))
+        return frozenset(
+            str(item) for item in raw if isinstance(item, str) and str(item).startswith(".")
+        )
     language = str(overlay.get("language", "")).lower()
     if language == "c":
         return SOURCE_SUFFIXES - CXX_SOURCE_SUFFIXES
@@ -702,12 +693,12 @@ def _overlay_path_prefixes(overlay: dict, key: str) -> tuple[str, ...]:
 
 
 def _path_under_prefixes(rel_posix: str, prefixes: tuple[str, ...]) -> bool:
-    return any(
-        rel_posix == prefix or rel_posix.startswith(f"{prefix}/") for prefix in prefixes
-    )
+    return any(rel_posix == prefix or rel_posix.startswith(f"{prefix}/") for prefix in prefixes)
 
 
-def _sources_for_overlay(sources: list[Path], overlay: dict, repo_root: Path | None = None) -> list[Path]:
+def _sources_for_overlay(
+    sources: list[Path], overlay: dict, repo_root: Path | None = None
+) -> list[Path]:
     allowed = _overlay_source_suffixes(overlay)
     include = _overlay_path_prefixes(overlay, "paths")
     exclude = _overlay_path_prefixes(overlay, "exclude_paths")
@@ -757,6 +748,7 @@ def filter_clang_tidy_sources(
         return []
     return clang_tidy_input_targets(scan_paths)
 
+
 GCC_ONLY_WARNINGS = (
     "-Warray-bounds=2",
     "-Wbidi-chars=any",
@@ -781,7 +773,7 @@ CLANG_FRONTEND_UNSUPPORTED_FLAGS = (
     "-Werror=trampolines",
     "-fstrict-flex-arrays=3",
     "-fzero-init-padding-bits=all",
-    "-fzero-init-padding-bits=union",
+    "-fzero-init-padding-bits=unions",
 )
 # ESP-IDF / embedded GCC flags with no Clang frontend equivalent.
 CLANG_TIDY_CROSS_GCC_STRIP = (
@@ -857,7 +849,8 @@ def _print_configure_compile_db_report(
     inputs = compile_db_input_stats(repo_root)
     if inputs:
         print(
-            f"  [2] merge inputs (manifest compile_db.*): {len(inputs)} compile_commands.json path(s)",
+            f"  [2] merge inputs (manifest compile_db.*): {len(inputs)} compile_commands.json "
+            "path(s)",
             flush=True,
         )
         for item in inputs:
@@ -903,12 +896,11 @@ def configure_compile_db(
 ) -> int:
     repo_root = repo_root.resolve()
     load(repo_root)
-    if not compile_db_is_configured(repo_root):
-        if not quiet:
-            print(
-                "compile database: skip (compile_db not declared in .github/lint-c-cpp.yaml)",
-                flush=True,
-            )
+    if not compile_db_is_configured(repo_root) and not quiet:
+        print(
+            "compile database: skip (compile_db not declared in .github/lint-c-cpp.yaml)",
+            flush=True,
+        )
     if compile_db_is_configured(repo_root) and verify_compile_db_cmake_coverage(repo_root) != 0:
         return 1
     projects = compile_db_userspace_entries(repo_root)
@@ -950,9 +942,13 @@ def configure_compile_db(
                 generator,
                 "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             ]
-            for item in project.get("cmake_args", []) if isinstance(project.get("cmake_args"), list) else []:
+            for item in (
+                project.get("cmake_args", []) if isinstance(project.get("cmake_args"), list) else []
+            ):
                 value = str(item)
-                if value.startswith("-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=") and not value.startswith("-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/"):
+                if value.startswith("-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=") and not value.startswith(
+                    "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/"
+                ):
                     rel = value.split("=", 1)[1]
                     args.append(f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY={repo_root / rel}")
                 else:
@@ -968,9 +964,10 @@ def configure_compile_db(
                 failures += 1
         if failures:
             return failures
-        if compile_db_is_configured(repo_root) and verify_required_compile_commands(
-            repo_root, include_firmware=False
-        ) != 0:
+        if (
+            compile_db_is_configured(repo_root)
+            and verify_required_compile_commands(repo_root, include_firmware=False) != 0
+        ):
             return 1
 
     resolved_kit = (lint_kit or _DEFAULT_LINT_KIT).resolve()
@@ -982,8 +979,7 @@ def configure_compile_db(
     header_role_issues = cxx_in_c_compatible_header_violations(source_paths, repo_root)
     if header_role_issues:
         print(
-            "error: C++ surface in .h still classified c_compatible "
-            "(rename to .hpp/.hh/.hxx):",
+            "error: C++ surface in .h still classified c_compatible (rename to .hpp/.hh/.hxx):",
             file=sys.stderr,
         )
         for issue in header_role_issues[:25]:
@@ -1141,9 +1137,7 @@ def run_cppcheck(
                 for path in targets
                 if (key := source_key(path, repo_root)) is not None and key in db.by_key
             ]
-            project_json.write_text(
-                json.dumps(subset, indent=2) + "\n", encoding="utf-8"
-            )
+            project_json.write_text(json.dumps(subset, indent=2) + "\n", encoding="utf-8")
             common = cppcheck_cli_common_args(
                 cfg, lint_kit=lint_kit, pass_cfg=pass_cfg, repo_root=repo_root
             )
@@ -1161,21 +1155,17 @@ def run_cppcheck(
                 db.by_key.get(key) if key else None,
             )
             if len(provenance) > 1:
-                for owner in provenance:
-                    groups.setdefault(owner, []).append(path)
+                for db_owner in provenance:
+                    groups.setdefault(db_owner, []).append(path)
                 continue
             owner = (
-                owning_compile_commands_json(
-                    repo_root, key, provenance=provenance or None
-                )
+                owning_compile_commands_json(repo_root, key, provenance=provenance or None)
                 if key
                 else None
             )
             groups.setdefault(owner, []).append(path)
         base_enable = [str(item) for item in cfg.get("enable", []) if isinstance(item, str)]
-        base_suppress = [
-            str(item) for item in cfg.get("suppressions", []) if isinstance(item, str)
-        ]
+        base_suppress = [str(item) for item in cfg.get("suppressions", []) if isinstance(item, str)]
         base_flags = [str(item) for item in cfg.get("flags", []) if isinstance(item, str)]
         for owner, group in sorted(groups.items(), key=lambda item: item[0] or ""):
             add, remove = override_dials_for_compile_db(repo_root, "cppcheck", owner)
@@ -1196,9 +1186,7 @@ def run_cppcheck(
                 for path in group
                 if (key := source_key(path, repo_root)) is not None and key in db.by_key
             ]
-            project_json.write_text(
-                json.dumps(subset, indent=2) + "\n", encoding="utf-8"
-            )
+            project_json.write_text(json.dumps(subset, indent=2) + "\n", encoding="utf-8")
             label = pass_id if owner is None else f"{pass_id}:{owner}"
             print(f"cppcheck ({label}): {len(group)} file(s)", flush=True)
             cmd = ["cppcheck", f"-j{jobs}", *common, f"--project={project_json}"]
@@ -1254,9 +1242,8 @@ def ensure_clang_tidy_configs_for_source_roots(
     repo_root = repo_root.resolve()
     lint_kit = lint_kit.resolve()
     merge_dir.mkdir(parents=True, exist_ok=True)
-    overrides_dir = lint_overrides_dir(repo_root)
-    if not overrides_dir.is_dir():
-        overrides_dir = None
+    overrides_path = lint_overrides_dir(repo_root)
+    overrides_dir = overrides_path if overrides_path.is_dir() else None
     seen: set[str] = set()
     for overlay in overlays:
         config_name = str(overlay.get("config", ".clang-tidy-cxx"))
@@ -1282,11 +1269,7 @@ def _compiler_driver_search_flags(tokens: list[str]) -> list[str]:
     honor ``-specs=``, so scrub must pass them into ``compiler -E -v`` when building
     ``-isystem`` paths -- otherwise newlib-first search breaks ``#include_next``.
     """
-    return [
-        token
-        for token in tokens
-        if token.startswith(("-specs=", "-march=", "-mabi="))
-    ]
+    return [token for token in tokens if token.startswith(("-specs=", "-march=", "-mabi="))]
 
 
 def _compiler_isystem_flags(
@@ -1566,7 +1549,7 @@ def scrub_compile_entry_for_clang_tidy(entry: dict) -> dict:
             if arg in ("-fsanitize", "-fno-sanitize-recover"):
                 skip_next = True
                 continue
-            if arg.startswith("-fsanitize=") or arg.startswith("-fno-sanitize-recover="):
+            if arg.startswith(("-fsanitize=", "-fno-sanitize-recover=")):
                 continue
             if arg in CLANG_TIDY_STRIP_FLAGS or arg == "-Werror":
                 continue
@@ -1575,6 +1558,7 @@ def scrub_compile_entry_for_clang_tidy(entry: dict) -> dict:
             out_args.append(arg)
         normalized["arguments"] = out_args
     return public_compile_entry(normalized)
+
 
 def _ensure_firmware_compile_commands_if_missing(repo_root: Path) -> int:
     """Build firmware compile_commands.json only when manifest paths are absent."""
@@ -1680,9 +1664,7 @@ def write_clang_tidy_compile_commands(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-    scope_issues = assert_compile_db_entries_in_scan_scope(
-        merged, repo_root, label=str(out_path)
-    )
+    scope_issues = assert_compile_db_entries_in_scan_scope(merged, repo_root, label=str(out_path))
     if scope_issues:
         for issue in scope_issues:
             print(f"error: {issue}", file=sys.stderr)
@@ -1715,9 +1697,7 @@ def write_cppcheck_compile_commands(
             merged.append(entry)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-    scope_issues = assert_compile_db_entries_in_scan_scope(
-        merged, repo_root, label=str(out_path)
-    )
+    scope_issues = assert_compile_db_entries_in_scan_scope(merged, repo_root, label=str(out_path))
     if scope_issues:
         for issue in scope_issues:
             print(f"error: {issue}", file=sys.stderr)
@@ -1735,7 +1715,7 @@ def merge_compile_commands(
     built = build_merged_compile_database(repo_root, scan_paths)
     if built is None:
         return False
-    db, synthesized = built
+    db, _synthesized = built
     try:
         write_clang_tidy_compile_commands(db, out_path, scan_paths=scan_paths)
         write_cppcheck_compile_commands(
@@ -1786,7 +1766,7 @@ def _emit_clang_tidy_pass_batches(
             and config_has_by_compile_db(repo_root, override_key)
             and lint_kit is not None
         )
-        if not split_by_db:
+        if not split_by_db or lint_kit is None:
             batches += 1
             print(
                 json.dumps(
@@ -1802,17 +1782,13 @@ def _emit_clang_tidy_pass_batches(
         groups: dict[str | None, list[Path]] = {}
         for path in overlay_sources:
             key = source_key(path, repo_root)
-            containing = (
-                compile_commands_jsons_covering_source(repo_root, key) if key else []
-            )
+            containing = compile_commands_jsons_covering_source(repo_root, key) if key else []
             if len(containing) > 1:
-                for owner in containing:
-                    groups.setdefault(owner, []).append(path)
+                for db_owner in containing:
+                    groups.setdefault(db_owner, []).append(path)
                 continue
             owner = (
-                owning_compile_commands_json(
-                    repo_root, key, provenance=containing or None
-                )
+                owning_compile_commands_json(repo_root, key, provenance=containing or None)
                 if key
                 else None
             )
@@ -1845,11 +1821,7 @@ def _emit_clang_tidy_pass_batches(
                 json.dumps(
                     {
                         "pass": pass_id,
-                        "overlay": (
-                            overlay_id
-                            if owner is None
-                            else f"{overlay_id}:{owner}"
-                        ),
+                        "overlay": (overlay_id if owner is None else f"{overlay_id}:{owner}"),
                         "config": str(out_path),
                         "files": [str(path) for path in group],
                     }
@@ -1866,8 +1838,8 @@ def _emit_clang_tidy_pass_batches(
             f"error: clang-tidy ({label}) batches missing {len(missing)} source file(s)",
             file=sys.stderr,
         )
-        for path in missing[:25]:
-            print(f"  - {path}", file=sys.stderr)
+        for missing_path in missing[:25]:
+            print(f"  - {missing_path}", file=sys.stderr)
         return 1
     if batches == 0:
         print(f"clang-tidy ({label}): skip (no overlay matched any source suffix)", file=sys.stderr)
@@ -1892,9 +1864,7 @@ def _emit_header_role_batches(
     """Emit dedicated clang-tidy argv batches for one header role."""
     del default_config  # overlay.config is authoritative
     headers = [
-        path
-        for path in iter_headers_for_role(scan_paths, repo_root, role=role)
-        if db.has(path)
+        path for path in iter_headers_for_role(scan_paths, repo_root, role=role) if db.has(path)
     ]
     if not headers:
         return 0
@@ -1985,6 +1955,7 @@ def _emit_cxx_only_header_batches(
         db=db,
         lint_kit=lint_kit,
     )
+
 
 def print_clang_tidy_batches(
     repo_root: Path,
@@ -2147,10 +2118,16 @@ def run_self_test() -> int:
         )
         scoped = (merge / ".clang-tidy-c").read_text(encoding="utf-8")
         if "ExcludeHeaderFilterRegex" in scoped:
-            print("self-test FAIL: source clang-tidy config must not use ExcludeHeaderFilterRegex", file=sys.stderr)
+            print(
+                "self-test FAIL: source clang-tidy config must not use ExcludeHeaderFilterRegex",
+                file=sys.stderr,
+            )
             ok = False
         if f"HeaderFilterRegex: '{c_filter}'" not in scoped:
-            print("self-test FAIL: scoped clang-tidy config missing c_compatible HeaderFilterRegex", file=sys.stderr)
+            print(
+                "self-test FAIL: scoped clang-tidy config missing c_compatible HeaderFilterRegex",
+                file=sys.stderr,
+            )
             ok = False
         ensure_clang_tidy_configs_for_source_roots(
             root,
@@ -2171,7 +2148,8 @@ def run_self_test() -> int:
         unsafe_scoped = (merge / ".clang-tidy-unsafe-c").read_text(encoding="utf-8")
         if "ExcludeHeaderFilterRegex" in unsafe_scoped:
             print(
-                "self-test FAIL: unsafe-api clang-tidy config must not use ExcludeHeaderFilterRegex",
+                "self-test FAIL: unsafe-api clang-tidy config must not use "
+                "ExcludeHeaderFilterRegex",
                 file=sys.stderr,
             )
             ok = False
@@ -2224,10 +2202,13 @@ def run_self_test() -> int:
         import compile_db_util
 
         compile_db_util.clear_cross_target_cache()
-        with patch.object(compile_db_util, "host_target_triple", return_value="x86_64-host"), patch.object(
-            compile_db_util,
-            "compiler_target_triple",
-            return_value="riscv32-esp-elf",
+        with (
+            patch.object(compile_db_util, "host_target_triple", return_value="x86_64-host"),
+            patch.object(
+                compile_db_util,
+                "compiler_target_triple",
+                return_value="riscv32-esp-elf",
+            ),
         ):
             scrubbed = _scrub_cross_compile_command(
                 cross_cmd,
@@ -2240,10 +2221,13 @@ def run_self_test() -> int:
             )
             ok = False
         header_cmd = f"{fake_path} -std=c11 -x c-header -c /src/port/board.h"
-        with patch.object(compile_db_util, "host_target_triple", return_value="x86_64-host"), patch.object(
-            compile_db_util,
-            "compiler_target_triple",
-            return_value="riscv32-esp-elf",
+        with (
+            patch.object(compile_db_util, "host_target_triple", return_value="x86_64-host"),
+            patch.object(
+                compile_db_util,
+                "compiler_target_triple",
+                return_value="riscv32-esp-elf",
+            ),
         ):
             header_argv = _scrub_cross_compile_command_argv(
                 header_cmd,
@@ -2357,9 +2341,7 @@ def run_self_test() -> int:
                     {
                         "directory": str(root),
                         "command": "xtensa-esp-elf-gcc -c",
-                        "file": str(
-                            (root / "third-party/esp-idf/components/vendor.c").resolve()
-                        ),
+                        "file": str((root / "third-party/esp-idf/components/vendor.c").resolve()),
                     },
                     {
                         "directory": str(root),
@@ -2370,9 +2352,7 @@ def run_self_test() -> int:
                         "directory": str(root),
                         "command": "clang -c",
                         "file": str(
-                            (
-                                root / "build/lint/tests/_deps/googletest-src/gtest-all.cc"
-                            ).resolve()
+                            (root / "build/lint/tests/_deps/googletest-src/gtest-all.cc").resolve()
                         ),
                     },
                 ]
@@ -2478,12 +2458,12 @@ def run_self_test() -> int:
             path.relative_to(root).as_posix()
             for path in filter_clang_tidy_sources(db, scan_paths=source_paths)
         }
-        expected = {
+        expected_sources = {
             "core/app.c",
             "port/board.c",
             "userspace/x.c",
         }
-        if selected != expected:
+        if selected != expected_sources:
             print(f"self-test FAIL: filter_clang_tidy_sources -> {selected}", file=sys.stderr)
             ok = False
         # Headers remain in compile-DB coverage / HeaderFilterRegex scope, not tidy argv.
@@ -2492,7 +2472,9 @@ def run_self_test() -> int:
             for path in clang_tidy_scan_targets(source_paths)
         }
         if "include/sample/api.h" not in coverage:
-            print("self-test FAIL: header missing from compile-DB coverage targets", file=sys.stderr)
+            print(
+                "self-test FAIL: header missing from compile-DB coverage targets", file=sys.stderr
+            )
             ok = False
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -2518,18 +2500,22 @@ def run_self_test() -> int:
     repo.mkdir()
     (repo / ".github").mkdir(parents=True)
     (repo / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core]\n",
         encoding="utf-8",
     )
     unsafe_paths = resolve_scan_paths(JOB_UNSAFE_API, repo_root=repo)
     source_paths = resolve_scan_paths(JOB_SOURCE, repo_root=repo)
-    if configure_compile_db(
-        repo,
-        quiet=True,
-        unsafe_api_paths=unsafe_paths,
-        source_paths=source_paths,
-    ) != 0:
+    if (
+        configure_compile_db(
+            repo,
+            quiet=True,
+            unsafe_api_paths=unsafe_paths,
+            source_paths=source_paths,
+        )
+        != 0
+    ):
         print("self-test FAIL: configure_compile_db", file=sys.stderr)
         ok = False
 
@@ -2537,7 +2523,8 @@ def run_self_test() -> int:
         root = Path(tmp)
         (root / ".github").mkdir(parents=True)
         (root / ".github" / "lint-c-cpp.yaml").write_text(
-            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+            "  public_headers_dir: include/sample\n"
             "  source_roots: [core]\n"
             "compile_db:\n"
             "  firmware:\n"
@@ -2562,7 +2549,8 @@ def run_self_test() -> int:
         root = Path(tmp)
         bootstrap_scan_manifest(root, source_roots=("userspace",))
         (root / ".github" / "lint-c-cpp.yaml").write_text(
-            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+            "  public_headers_dir: include/sample\n"
             "  source_roots: [userspace]\n"
             "compile_db:\n"
             "  firmware:\n"

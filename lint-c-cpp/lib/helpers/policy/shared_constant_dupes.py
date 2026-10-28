@@ -126,7 +126,8 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core, port, userspace, tests]\n",
         encoding="utf-8",
     )

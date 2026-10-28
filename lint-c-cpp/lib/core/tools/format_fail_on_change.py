@@ -47,7 +47,7 @@ def _fail(detail: str) -> int:
 
 def apply_with_fail_on_change(
     paths: Iterable[Path],
-    apply: Callable[[], None],
+    apply: Callable[[], object],
     *,
     detail: str,
 ) -> int:

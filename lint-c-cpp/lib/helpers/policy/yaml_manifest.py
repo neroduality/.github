@@ -27,7 +27,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from consumer_manifest import manifest_path
 from format_fail_on_change import apply_with_fail_on_change, formatter_ok_message
 from policy_config import PolicyConfig
 
@@ -206,7 +205,9 @@ def render_lint_config(preamble: str, data: dict[str, Any]) -> str:
     return f"{preamble}{body}"
 
 
-def lint_one_lint_config_manifest(manifest_path: Path, rule: dict[str, Any], args: argparse.Namespace) -> int:
+def lint_one_lint_config_manifest(
+    manifest_path: Path, rule: dict[str, Any], args: argparse.Namespace
+) -> int:
     if not manifest_path.is_file():
         print(f"error: manifest not found: {manifest_path}", file=sys.stderr)
         return 1
@@ -245,7 +246,10 @@ def lint_one_lint_config_manifest(manifest_path: Path, rule: dict[str, Any], arg
         print(f"yamllint: rewrote {manifest_path}")
         return 0
 
-    print(f"error: {manifest_path} is not canonical (pass --check, --write or --fail-on-change)", file=sys.stderr)
+    print(
+        f"error: {manifest_path} is not canonical (pass --check, --write or --fail-on-change)",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -292,7 +296,7 @@ def unquote_yaml_scalar(raw: str) -> str:
         quote = value[0]
         inner = value[1:-1]
         if quote == '"':
-            inner = inner.replace("\\\"", '"').replace("\\\\", "\\")
+            inner = inner.replace('\\"', '"').replace("\\\\", "\\")
         return inner
     return value
 
@@ -307,7 +311,7 @@ def yaml_scalar(value: str) -> str:
         return '""'
     if re.fullmatch(r"\d+(\.\d+)+", value):
         return quoted_scalar(value)
-    if any(ch in value for ch in ':#[]{},"\'&*!?|>@%`') or value != value.strip():
+    if any(ch in value for ch in ":#[]{},\"'&*!?|>@%`") or value != value.strip():
         return quoted_scalar(value)
     return value
 
@@ -320,7 +324,9 @@ def render_entry(entry: dict) -> str:
         value = entry[field]
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
-        rendered = quoted_scalar(str(value)) if field in {"spec_value", "ref"} else yaml_scalar(str(value))
+        rendered = (
+            quoted_scalar(str(value)) if field in {"spec_value", "ref"} else yaml_scalar(str(value))
+        )
         lines.append(f"    {field}: {rendered}")
     return "\n".join(lines)
 
@@ -408,7 +414,13 @@ def self_test() -> int:
 
     empty_field = {
         "constants": [
-            {"spec_prefix": "P", "symbol": "  ", "spec_value": "1", "ref": "section 1", "source": "a.h"},
+            {
+                "spec_prefix": "P",
+                "symbol": "  ",
+                "spec_value": "1",
+                "ref": "section 1",
+                "source": "a.h",
+            },
         ]
     }
     assert any("symbol" in e for e in validate_manifest(empty_field)), empty_field
@@ -418,15 +430,33 @@ def self_test() -> int:
 
     unsorted = {
         "constants": [
-            {"spec_prefix": "Z", "symbol": "B", "spec_value": "1", "ref": "section 1", "source": "a.h"},
-            {"spec_prefix": "A", "symbol": "C", "spec_value": "2", "ref": "section 2", "source": "b.h"},
-            {"spec_prefix": "A", "symbol": "A", "spec_value": "3", "ref": "section 3", "source": "c.h"},
+            {
+                "spec_prefix": "Z",
+                "symbol": "B",
+                "spec_value": "1",
+                "ref": "section 1",
+                "source": "a.h",
+            },
+            {
+                "spec_prefix": "A",
+                "symbol": "C",
+                "spec_value": "2",
+                "ref": "section 2",
+                "source": "b.h",
+            },
+            {
+                "spec_prefix": "A",
+                "symbol": "A",
+                "spec_value": "3",
+                "ref": "section 3",
+                "source": "c.h",
+            },
         ]
     }
     sorted_entries = sort_constants(unsorted["constants"])
     assert [e["symbol"] for e in sorted_entries] == ["A", "C", "B"]
     rendered = render_manifest("", sorted_entries)
-    assert "spec_value: \"1\"" in rendered
+    assert 'spec_value: "1"' in rendered
     assert rendered.index("spec_prefix: A") < rendered.index("spec_prefix: Z")
 
     raw_block = """
@@ -441,7 +471,7 @@ constants:
     parsed = parse_constants_body(raw_block)
     assert parsed[0]["spec_value"] == "0x61"
     roundtrip = render_manifest("", parsed)
-    assert "spec_value: \"0x61\"" in roundtrip
+    assert 'spec_value: "0x61"' in roundtrip
     assert load_manifest_from_text(raw_block)[1]["constants"][0]["spec_value"] == "0x61"
 
     lint_cfg = {
@@ -460,7 +490,9 @@ constants:
 
     license_cfg = canonicalize_lint_config(
         {
-            "license_header": "# SPDX-License-Identifier: Apache-2.0\n#\n# Copyright (C) 2026 Example.\n",
+            "license_header": (
+                "# SPDX-License-Identifier: Apache-2.0\n#\n# Copyright (C) 2026 Example.\n"
+            ),
             "scan": {"c_api_prefix": "x", "c_macro_prefix": "X"},
         },
         "key",
@@ -546,7 +578,10 @@ def lint_one_spec_manifest(manifest_path: Path, args: argparse.Namespace) -> int
         print(f"yamllint: rewrote {manifest_path} ({len(data['constants'])} entries)")
         return 0
 
-    print(f"error: {manifest_path} is not canonical (pass --check, --write or --fail-on-change)", file=sys.stderr)
+    print(
+        f"error: {manifest_path} is not canonical (pass --check, --write or --fail-on-change)",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -558,7 +593,9 @@ def yamllint_ok_message(checked: int, reformatted: int = 0) -> str:
     return formatter_ok_message("yamllint", checked, reformatted)
 
 
-def run_configured_yamllint(config: PolicyConfig, paths: list[Path], args: argparse.Namespace) -> int | None:
+def run_configured_yamllint(
+    config: PolicyConfig, paths: list[Path], args: argparse.Namespace
+) -> int | None:
     repo_root = config.repo_root.resolve()
     config_path = repo_root / ".github" / "lint-c-cpp.yaml"
     if not config_path.is_file():
@@ -571,8 +608,9 @@ def run_configured_yamllint(config: PolicyConfig, paths: list[Path], args: argpa
             print(f"error: {issue}", file=sys.stderr)
         return 1
     yaml_paths = manifest_paths if manifest_paths else configured_yaml_files(paths)
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    yamllint_cfg = config.get("yamllint") if isinstance(config.get("yamllint"), dict) else {}
+    manifest_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    raw_yamllint = manifest_data.get("yamllint")
+    yamllint_cfg = raw_yamllint if isinstance(raw_yamllint, dict) else {}
     file_rules = yamllint_cfg.get("files", []) if isinstance(yamllint_cfg, dict) else []
     rule_paths = [
         str(rule.get("path"))
@@ -580,7 +618,9 @@ def run_configured_yamllint(config: PolicyConfig, paths: list[Path], args: argpa
         if isinstance(rule, dict) and isinstance(rule.get("path"), str)
     ]
     if rule_paths != sorted(rule_paths):
-        print("error: .github/lint-c-cpp.yaml yamllint.files must be sorted by path", file=sys.stderr)
+        print(
+            "error: .github/lint-c-cpp.yaml yamllint.files must be sorted by path", file=sys.stderr
+        )
         return 1
     by_path = {
         str(rule.get("path")): rule
@@ -608,4 +648,3 @@ def run_configured_yamllint(config: PolicyConfig, paths: list[Path], args: argpa
         return 1
     print(yamllint_ok_message(count))
     return 0
-

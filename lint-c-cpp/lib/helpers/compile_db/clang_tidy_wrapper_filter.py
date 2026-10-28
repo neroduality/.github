@@ -28,15 +28,16 @@ import io
 import re
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 _LINT_LIB = Path(__file__).resolve().parents[2]
 if str(_LINT_LIB) not in sys.path:
     sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath
+from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
 
 _bootstrap_lint_pythonpath()
-from scan_policy import bootstrap_scan_manifest, path_is_unsafe_wrapper
+from scan_policy import bootstrap_scan_manifest, path_is_unsafe_wrapper  # noqa: E402
 
 _DIAG = re.compile(r"^(.+?):(\d+):(\d+): (error|warning|note):")
 _CHECK = re.compile(r"\[([^\]]+)\]\s*$")
@@ -119,9 +120,7 @@ def filter_clang_tidy_output(text: str, repo_root: Path) -> tuple[list[str], boo
     return kept, failed
 
 
-def stream_clang_tidy_output(
-    repo_root: Path, stream: io.TextIOBase
-) -> tuple[bool, bool]:
+def stream_clang_tidy_output(repo_root: Path, stream: Iterable[str]) -> tuple[bool, bool]:
     """Pass progress through live; return (failed, waived_wrapper_diagnostic_seen)."""
     repo_root = repo_root.resolve()
     failed = False
@@ -143,7 +142,8 @@ def run_self_test() -> int:
         root = Path(tmp)
         (root / ".github").mkdir()
         (root / ".github" / "lint-c-cpp.yaml").write_text(
-            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+            "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+            "  public_headers_dir: include/sample\n"
             "  source_roots: [core, include]\n"
             "policy:\n  unsafe_api:\n    header: sample_null.h\n"
             "    include_headers: [attrs.h]\n"
@@ -174,7 +174,12 @@ def run_self_test() -> int:
         )
         kept, failed = filter_clang_tidy_output(out, root)
         text = "\n".join(kept)
-        if "wrapper error" in text or "wrapper note" in text or "bad();" in text or "more();" in text:
+        if (
+            "wrapper error" in text
+            or "wrapper note" in text
+            or "bad();" in text
+            or "more();" in text
+        ):
             print("self-test FAIL: wrapper diagnostics were not dropped", file=sys.stderr)
             return 1
         if "app error" not in text or not failed:
@@ -195,7 +200,9 @@ def run_self_test() -> int:
         wrapper_kept, wrapper_failed = filter_clang_tidy_output(wrapper_only, root)
         wrapper_text = "\n".join(wrapper_kept)
         if wrapper_failed or "wrapper error" in wrapper_text:
-            print("self-test FAIL: wrapper-only batch must drop wrapper diagnostics", file=sys.stderr)
+            print(
+                "self-test FAIL: wrapper-only batch must drop wrapper diagnostics", file=sys.stderr
+            )
             return 1
         if "3 warnings generated." in wrapper_text:
             print("self-test FAIL: wrapper-only summary must be dropped", file=sys.stderr)
@@ -219,12 +226,19 @@ def run_self_test() -> int:
         with contextlib.redirect_stdout(capture):
             stream_failed, stream_wrapper_seen = stream_clang_tidy_output(root, stream_in)
         if not stream_failed:
-            print("self-test FAIL: stream mode must fail on non-wrapper diagnostics", file=sys.stderr)
+            print(
+                "self-test FAIL: stream mode must fail on non-wrapper diagnostics", file=sys.stderr
+            )
             return 1
         if not stream_wrapper_seen:
-            print("self-test FAIL: stream mode must report waived wrapper diagnostics", file=sys.stderr)
+            print(
+                "self-test FAIL: stream mode must report waived wrapper diagnostics",
+                file=sys.stderr,
+            )
             return 1
-        crash = f"{wrapper}:1:1: error: wrapper error [bugprone-unsafe-functions]\nLLVM ERROR: boom\n"
+        crash = (
+            f"{wrapper}:1:1: error: wrapper error [bugprone-unsafe-functions]\nLLVM ERROR: boom\n"
+        )
         crash_kept, crash_failed = filter_clang_tidy_output(crash, root)
         if not crash_failed or not any("LLVM ERROR" in line for line in crash_kept):
             print("self-test FAIL: wrapper diagnostics must not hide tool crashes", file=sys.stderr)
@@ -245,7 +259,9 @@ def run_self_test() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path)
-    parser.add_argument("--stream", action="store_true", help="Filter stdin line-by-line for live progress")
+    parser.add_argument(
+        "--stream", action="store_true", help="Filter stdin line-by-line for live progress"
+    )
     parser.add_argument(
         "--wrapper-status",
         action="store_true",

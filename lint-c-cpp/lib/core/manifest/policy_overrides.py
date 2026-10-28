@@ -35,6 +35,41 @@ OVERRIDE_CONFIG_KEYS = (
 )
 OVERRIDE_CONFIG_KEY_SET = frozenset(OVERRIDE_CONFIG_KEYS)
 OVERRIDE_ENTRY_KEYS = frozenset({"add", "remove", "by_compile_db"})
+# Optional, openssf-hardening only: host-only OpenSSF flags the consumer also wants
+# emitted on cross builds (sysroot libc probe still gates them). Not part of the
+# required add/remove/by_compile_db triple; absent == no opt-in.
+OPENSSF_CROSS_OPT_IN_KEY = "cross"
+_OPTIONAL_ENTRY_KEYS_BY_CONFIG: dict[str, frozenset[str]] = {
+    "openssf-hardening": frozenset({OPENSSF_CROSS_OPT_IN_KEY}),
+}
+# Vocabulary for ``cross``: the OpenSSF flags the kit gates host-only by default.
+# Kept here (core) so manifest validation does not depend on helpers/policy; the
+# hardening generator imports these sets rather than redefining them.
+#
+# Probe-gated: linker probe AND sysroot libc probe AND native. Opting in drops the
+# native term; the libc probe (run against the cross sysroot) still gates the flag.
+OPENSSF_HOST_ONLY_PROBE_FLAGS = frozenset(
+    {
+        "LINKER:-z,pack-relative-relocs",
+        "LINKER:-z,text",
+        "LINKER:--error-execstack",
+        "LINKER:--error-rwx-segments",
+    }
+)
+# Genex-gated (``gate_requires: [CMAKE_CROSSCOMPILING, ...]``): dynamic-loader link
+# flags that are meaningless for bare-metal/firmware cross targets but required on
+# Linux userspace cross ports (ELF PIE / RELRO / BIND_NOW / non-exec stack). Opting
+# in drops the native term while keeping any TARGET_PROPERTY:TYPE term.
+OPENSSF_HOST_ONLY_GENEX_FLAGS = frozenset(
+    {
+        "-pie",
+        "-fexceptions",
+        "LINKER:-z,noexecstack",
+        "LINKER:-z,now",
+        "LINKER:-z,relro",
+    }
+)
+OPENSSF_HOST_ONLY_FLAGS = OPENSSF_HOST_ONLY_PROBE_FLAGS | OPENSSF_HOST_ONLY_GENEX_FLAGS
 OVERRIDE_BY_COMPILE_DB_ENTRY_KEYS = frozenset({"compile_commands_json", "add", "remove"})
 
 _CLANG_TIDY_CONFIG_BY_OVERRIDE = {
@@ -83,7 +118,36 @@ def _validate_add_remove(value: Any, label: str) -> list[str]:
     return []
 
 
-def validate_policy_overrides(data: dict[str, Any], manifest_path: Path, repo_root: Path) -> list[str]:
+def normalize_openssf_cross_opt_in(
+    tokens: Any,
+) -> tuple[frozenset[str], list[str]]:
+    """Validate ``policy.overrides.openssf-hardening.cross`` tokens.
+
+    Returns ``(accepted, issues)``. Only host-only-by-default flags can be opted in;
+    anything else is a configuration error rather than a silent no-op.
+    """
+    if not tokens or not isinstance(tokens, (list, tuple, set, frozenset)):
+        return frozenset(), []
+    accepted: set[str] = set()
+    issues: list[str] = []
+    for raw in tokens:
+        token = str(raw).strip()
+        if not token:
+            continue
+        if token not in OPENSSF_HOST_ONLY_FLAGS:
+            issues.append(
+                f"policy.overrides.openssf-hardening.{OPENSSF_CROSS_OPT_IN_KEY}: {token!r} is "
+                "not a host-only OpenSSF flag (allowed: "
+                f"{', '.join(sorted(OPENSSF_HOST_ONLY_FLAGS))})"
+            )
+            continue
+        accepted.add(token)
+    return frozenset(accepted), issues
+
+
+def validate_policy_overrides(
+    data: dict[str, Any], manifest_path: Path, repo_root: Path
+) -> list[str]:
     policy = data.get("policy")
     if not isinstance(policy, dict):
         return []
@@ -115,11 +179,17 @@ def validate_policy_overrides(data: dict[str, Any], manifest_path: Path, repo_ro
         if not isinstance(entry, dict):
             issues.append(f"{manifest_path}: {label} must be a mapping")
             continue
-        entry_unknown = sorted(k for k in entry if k not in OVERRIDE_ENTRY_KEYS)
+        optional_keys = _OPTIONAL_ENTRY_KEYS_BY_CONFIG.get(key, frozenset())
+        entry_unknown = sorted(
+            k for k in entry if k not in OVERRIDE_ENTRY_KEYS and k not in optional_keys
+        )
         if entry_unknown:
+            allowed = "add, remove, by_compile_db"
+            if optional_keys:
+                allowed += ", " + ", ".join(sorted(optional_keys))
             issues.append(
                 f"{manifest_path}: unknown {label} fields: {', '.join(entry_unknown)} "
-                "(allowed: add, remove, by_compile_db)"
+                f"(allowed: {allowed})"
             )
         missing_entry = sorted(k for k in OVERRIDE_ENTRY_KEYS if k not in entry)
         if missing_entry:
@@ -135,6 +205,13 @@ def validate_policy_overrides(data: dict[str, Any], manifest_path: Path, repo_ro
             f"{manifest_path}: {msg}"
             for msg in _validate_add_remove(entry.get("remove"), f"{label}.remove")
         )
+        if OPENSSF_CROSS_OPT_IN_KEY in optional_keys and OPENSSF_CROSS_OPT_IN_KEY in entry:
+            cross_label = f"{label}.{OPENSSF_CROSS_OPT_IN_KEY}"
+            cross_issues = _validate_add_remove(entry.get(OPENSSF_CROSS_OPT_IN_KEY), cross_label)
+            issues.extend(f"{manifest_path}: {msg}" for msg in cross_issues)
+            if not cross_issues and entry.get(OPENSSF_CROSS_OPT_IN_KEY) is not None:
+                _, bad = normalize_openssf_cross_opt_in(entry[OPENSSF_CROSS_OPT_IN_KEY])
+                issues.extend(f"{manifest_path}: {msg}" for msg in bad)
         if "by_compile_db" not in entry:
             continue
         by_db = entry.get("by_compile_db")
@@ -159,7 +236,8 @@ def validate_policy_overrides(data: dict[str, Any], manifest_path: Path, repo_ro
             raw_json = item.get("compile_commands_json")
             if not isinstance(raw_json, str) or not raw_json.strip():
                 issues.append(
-                    f"{manifest_path}: {item_label}.compile_commands_json must be a non-empty string"
+                    f"{manifest_path}: {item_label}.compile_commands_json must be a non-empty "
+                    "string"
                 )
             else:
                 rel = Path(raw_json.strip()).as_posix()
@@ -181,7 +259,9 @@ def validate_policy_overrides(data: dict[str, Any], manifest_path: Path, repo_ro
                     for msg in _validate_add_remove(item.get("add"), f"{item_label}.add")
                 )
             if "remove" not in item:
-                issues.append(f"{manifest_path}: {item_label}.remove is required (use null if none)")
+                issues.append(
+                    f"{manifest_path}: {item_label}.remove is required (use null if none)"
+                )
             else:
                 issues.extend(
                     f"{manifest_path}: {msg}"
@@ -206,7 +286,17 @@ def override_tokens(entry: dict[str, Any], key: str) -> tuple[str, ...] | None:
     return tuple(str(item).strip() for item in raw if isinstance(item, str) and item.strip())
 
 
-def global_override_dials(repo_root: Path, config_key: str) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
+def openssf_cross_opt_in(repo_root: Path) -> tuple[str, ...]:
+    """Host-only OpenSSF flags opted in for cross builds (empty when unset)."""
+    entry = policy_overrides(repo_root).get("openssf-hardening")
+    if not isinstance(entry, dict):
+        return ()
+    return override_tokens(entry, OPENSSF_CROSS_OPT_IN_KEY) or ()
+
+
+def global_override_dials(
+    repo_root: Path, config_key: str
+) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     entry = policy_overrides(repo_root).get(config_key)
     if not isinstance(entry, dict):
         return None, None
@@ -276,9 +366,7 @@ def _declared_compile_db_kinds(repo_root: Path) -> list[tuple[str, str]]:
     return rows
 
 
-def compile_commands_jsons_containing_source(
-    repo_root: Path, lookup_key: str
-) -> list[str]:
+def compile_commands_jsons_containing_source(repo_root: Path, lookup_key: str) -> list[str]:
     """All declared ``compile_commands_json`` paths that list ``lookup_key``."""
     repo_root = repo_root.resolve()
     out: list[str] = []
@@ -288,9 +376,7 @@ def compile_commands_jsons_containing_source(
     return out
 
 
-def compile_commands_jsons_covering_source(
-    repo_root: Path, lookup_key: str
-) -> list[str]:
+def compile_commands_jsons_covering_source(repo_root: Path, lookup_key: str) -> list[str]:
     """Declared databases containing a source or owning its manifest source root.
 
     Headers normally receive synthesized compile entries and therefore are not
@@ -303,7 +389,10 @@ def compile_commands_jsons_covering_source(
     from consumer_manifest import compile_db_firmware_entries, compile_db_userspace_entries
 
     out: list[str] = []
-    for entry in (*compile_db_firmware_entries(repo_root), *compile_db_userspace_entries(repo_root)):
+    for entry in (
+        *compile_db_firmware_entries(repo_root),
+        *compile_db_userspace_entries(repo_root),
+    ):
         source = Path(str(entry.get("source", "")).strip()).as_posix().strip("/")
         if not source:
             continue
@@ -369,9 +458,7 @@ def owning_compile_commands_json(
                         return cand
                 return next(rel for rel, _ in containing if rel in prov)
     roots = firmware_compile_source_roots(repo_root)
-    prefer_firmware = any(
-        lookup_key == root or lookup_key.startswith(f"{root}/") for root in roots
-    )
+    prefer_firmware = any(lookup_key == root or lookup_key.startswith(f"{root}/") for root in roots)
     if prefer_firmware:
         for rel, kind in containing:
             if kind == "firmware":
@@ -467,16 +554,14 @@ def apply_openssf_coverage_flag_overrides(
         return out
     flag_strs = [str(item) for item in flags]
     definitions = coverage.get("definitions")
-    definition_strs = (
-        [str(item) for item in definitions] if isinstance(definitions, list) else []
-    )
+    definition_strs = [str(item) for item in definitions] if isinstance(definitions, list) else []
     if remove:
         drop = set(remove)
         flag_strs = [item for item in flag_strs if item not in drop]
         definition_strs = [item for item in definition_strs if item not in drop]
     if add:
         for item in add:
-            if item.startswith("-") or item.startswith("LINKER:"):
+            if item.startswith(("-", "LINKER:")):
                 if item not in flag_strs:
                     flag_strs.append(item)
             elif item not in definition_strs:
@@ -522,9 +607,7 @@ def materialize_clang_tidy_config_for_compile_db(
     if override_key is None:
         out_path.write_text(base_text, encoding="utf-8")
         return out_path
-    add, remove = override_dials_for_compile_db(
-        repo_root, override_key, compile_commands_json
-    )
+    add, remove = override_dials_for_compile_db(repo_root, override_key, compile_commands_json)
     text = apply_clang_tidy_checks_overrides(base_text, add=add, remove=remove)
     out_path.write_text(text, encoding="utf-8")
     return out_path
@@ -569,7 +652,9 @@ def _normalize_check_token(token: str, *, disable: bool) -> str:
     return name[1:] if name.startswith("-") else name
 
 
-def apply_clang_tidy_checks_overrides(text: str, *, add: tuple[str, ...] | None, remove: tuple[str, ...] | None) -> str:
+def apply_clang_tidy_checks_overrides(
+    text: str, *, add: tuple[str, ...] | None, remove: tuple[str, ...] | None
+) -> str:
     if not add and not remove:
         return text
     match = re.search(r"(?ms)^(Checks:\s*>\s*\n)(.*?)(\n\n|\nWarningsAsErrors:)", text)
@@ -604,10 +689,7 @@ def apply_clang_tidy_checks_overrides(text: str, *, add: tuple[str, ...] | None,
             normalized.append(name)
             seen.add(key)
     rendered = ",\n  ".join(normalized)
-    if prefix.rstrip().endswith(">"):
-        new_body = f"  {rendered},\n"
-    else:
-        new_body = rendered
+    new_body = f"  {rendered},\n" if prefix.rstrip().endswith(">") else rendered
     return text[: match.start()] + prefix + new_body + suffix + text[match.end() :]
 
 
@@ -702,9 +784,7 @@ def materialize_override_configs(repo_root: Path, lint_kit: Path, out_dir: Path)
     openssf_path = lint_kit / "config" / "openssf-hardening-manifest.yaml"
     openssf_data = yaml.safe_load(openssf_path.read_text(encoding="utf-8")) or {}
     if isinstance(openssf_data, dict):
-        openssf_data = apply_openssf_coverage_flag_overrides(
-            openssf_data, add=add, remove=remove
-        )
+        openssf_data = apply_openssf_coverage_flag_overrides(openssf_data, add=add, remove=remove)
     if add or remove:
         (out_dir / "openssf-hardening-manifest.yaml").write_text(
             yaml.safe_dump(openssf_data, sort_keys=False),

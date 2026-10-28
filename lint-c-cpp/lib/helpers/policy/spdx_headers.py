@@ -61,6 +61,23 @@ _SELF_TEST_LICENSE_BLOB = """\
   # limitations under the License.
 """
 
+# Comment lines that only work at the very top of a file, so the header goes
+# below them the way it goes below a shebang: Dockerfile parser directives, a
+# PEP 263 encoding cookie, and Emacs / Vim modelines.
+_TOP_DIRECTIVE_BODY = re.compile(
+    r"(?:syntax|escape|check)\s*=|.*?coding[:=]|.*-\*-.*-\*-|(?:.*\s)?(?:vim?|ex):"
+)
+
+
+def _is_top_directive(line: str, prefix: str) -> bool:
+    stripped = line.lstrip(" \t\f")
+    if not stripped.startswith(prefix):
+        return False
+    body = stripped[len(prefix) :].lstrip()
+    if body.startswith("SPDX-License-Identifier:"):
+        return False
+    return _TOP_DIRECTIVE_BODY.match(body) is not None
+
 
 def _year() -> int:
     return datetime.now(UTC).year
@@ -124,9 +141,9 @@ def _apply_license_blob(license_blob: str) -> None:
 def _load_yaml_mapping(path: Path) -> dict:
     try:
         import yaml
-    except ImportError:
+    except ImportError as err:
         print(f"error: PyYAML is required to read {path}", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from err
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
 
@@ -146,7 +163,8 @@ def configure_from_manifest(repo_root: Path) -> None:
         )
         raise SystemExit(2)
     _apply_license_blob(license_blob)
-    scan = data.get("scan") if isinstance(data.get("scan"), dict) else {}
+    raw_scan = data.get("scan")
+    scan = raw_scan if isinstance(raw_scan, dict) else {}
     if scan.get("exclude_dirs") or scan.get("exclude_files"):
         unknown = []
         if scan.get("exclude_dirs"):
@@ -155,7 +173,8 @@ def configure_from_manifest(repo_root: Path) -> None:
             unknown.append("exclude_files")
         print(
             f"error: {manifest_path(repo_root)} unknown scan fields: {', '.join(unknown)} "
-            f"(allowed: {', '.join(sorted(['c_api_prefix', 'c_macro_prefix', 'exclude_gitignore', 'public_headers_dir', 'source_roots']))})",
+            "(allowed: c_api_prefix, c_macro_prefix, exclude_gitignore, public_headers_dir, "
+            "source_roots)",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -176,7 +195,7 @@ def _expected_comment_lines(year: int, prefix: str) -> list[str]:
 
 def _prefixed_header_text(year: int, prefix: str) -> str:
     # One blank line after the full corpus separates it from file body.
-    return "\n".join(_expected_comment_lines(year, prefix) + ["", ""])
+    return "\n".join([*_expected_comment_lines(year, prefix), "", ""])
 
 
 def hash_header_text(year: int) -> str:
@@ -258,9 +277,7 @@ def _is_license_inner(inner: str) -> bool:
     return False
 
 
-def _scan_comment_license_extent(
-    lines: list[str], spdx_idx: int, prefix: str
-) -> int:
+def _scan_comment_license_extent(lines: list[str], spdx_idx: int, prefix: str) -> int:
     """End index of a SPDX-started line-comment run (for replacement)."""
     k = spdx_idx
     while k < len(lines):
@@ -281,6 +298,103 @@ def _scan_comment_license_extent(
     return k
 
 
+def _is_exact_license_line(inner: str) -> bool:
+    """True only for a blank or a full corpus line. Unlike ``_is_license_inner``,
+    a comment that merely contains the last corpus sentence does not match."""
+    _require_configured()
+    s = inner.strip()
+    if s == "":
+        return True
+    for line in _LICENSE_LINES or []:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pattern = "^" + re.escape(stripped).replace(re.escape("{year}"), r"\d{4}") + "$"
+        if re.match(pattern, s):
+            return True
+    return False
+
+
+def _license_block_qualifies(inners: list[str]) -> bool:
+    """A comment run/block is a redundant license header when every line is an
+    exact corpus line and it carries the SPDX tag, a Copyright line, or at least
+    two corpus lines. A comment that only mentions the license stays."""
+    nonblank = [s.strip() for s in inners if s.strip()]
+    if not nonblank or not all(_is_exact_license_line(s) for s in nonblank):
+        return False
+    if any(s.startswith("SPDX-License-Identifier:") for s in nonblank):
+        return True
+    if any(re.match(r"Copyright \(C\)\s+\d{4}", s) for s in nonblank):
+        return True
+    return len(nonblank) >= 2
+
+
+def _consume_line_comment_license_run(lines: list[str], start: int, marker: str) -> int | None:
+    """End index (exclusive) of a license-only ``marker`` comment run at ``start``."""
+    inners: list[str] = []
+    k = start
+    while k < len(lines):
+        inner = _strip_comment_content(lines[k], marker)
+        if inner is None or not _is_license_inner(inner):
+            break
+        inners.append(inner)
+        k += 1
+    return k if k > start and _license_block_qualifies(inners) else None
+
+
+def _block_comment_inner(line: str) -> str:
+    s = line.strip()
+    if s.startswith("/*"):
+        s = s[2:]
+    if s.endswith("*/"):
+        s = s[:-2]
+    s = s.strip()
+    if s.startswith("*"):
+        s = s[1:].strip()
+    return s
+
+
+def _consume_block_comment_license(lines: list[str], start: int) -> int | None:
+    """End index (exclusive) of a ``/* ... */`` block at ``start`` that is a license header."""
+    if not lines[start].lstrip().startswith("/*"):
+        return None
+    inners: list[str] = []
+    k = start
+    while k < len(lines):
+        raw = lines[k]
+        inners.append(_block_comment_inner(raw))
+        k += 1
+        if "*/" in raw:
+            break
+    else:
+        return None  # unterminated block comment: leave untouched
+    return k if _license_block_qualifies(inners) else None
+
+
+def _strip_duplicate_license_blocks(rest: list[str], prefix: str) -> tuple[list[str], bool]:
+    """Drop redundant license headers at the head of ``rest`` (the file body after
+    the canonical header). Handles a second ``//``/``#`` run and, for C/C++, one or
+    more ``/* ... */`` blocks (``/* SPDX */`` followed by ``/* Copyright ... */``).
+    Exactly one blank line then separates header and body."""
+    j = 0
+    stripped_any = False
+    while True:
+        while j < len(rest) and rest[j].strip() == "":
+            j += 1
+        if j >= len(rest):
+            break
+        end = _consume_line_comment_license_run(rest, j, prefix)
+        if end is None and prefix != "#":
+            end = _consume_block_comment_license(rest, j)
+        if end is None:
+            break
+        j = end
+        stripped_any = True
+    if not stripped_any:
+        return rest, False
+    return rest[j:], True
+
+
 def _repair_line_comment(
     content: str, year: int, *, prefix: str, shebang: bool = False
 ) -> tuple[str, bool]:
@@ -291,6 +405,9 @@ def _repair_line_comment(
     if shebang and lines and lines[0].startswith("#!"):
         out_prefix.append(lines[0])
         i = 1
+    while i < len(lines) and _is_top_directive(lines[i], prefix):
+        out_prefix.append(lines[i])
+        i += 1
     while i < len(lines) and lines[i].strip() == "":
         i += 1
 
@@ -307,14 +424,29 @@ def _repair_line_comment(
             break
 
     header_lines = (hash_header_text if prefix == "#" else cpp_header_text)(year).splitlines()
+    # The header must be the first thing after the shebang. Source found above a
+    # misplaced SPDX tag is real code: the rewrite moves it below the header.
+    preamble = [] if spdx_idx is None else lines[i:spdx_idx]
+    while preamble and preamble[-1].strip() == "":
+        preamble.pop()
     if spdx_idx is None:
-        merged = out_prefix + header_lines + lines[i:]
-    else:
-        # Require the contiguous block to equal the entire license_header corpus.
-        if lines[spdx_idx : spdx_idx + len(expected)] == expected:
+        # No line-comment header: replace any block-comment header instead of
+        # stacking the corpus in front of it.
+        rest, _ = _strip_duplicate_license_blocks(lines[i:], prefix)
+    elif lines[spdx_idx : spdx_idx + len(expected)] == expected:
+        # Contiguous block equals the entire corpus; only a misplaced header or a
+        # trailing duplicate header (any comment style) still needs repair.
+        rest, stripped = _strip_duplicate_license_blocks(lines[spdx_idx + len(expected) :], prefix)
+        if not stripped and not preamble:
             return content, False
+    else:
         end_exclusive = _scan_comment_license_extent(lines, spdx_idx, prefix)
-        merged = out_prefix + header_lines + lines[end_exclusive:]
+        rest, _ = _strip_duplicate_license_blocks(lines[end_exclusive:], prefix)
+    if preamble:
+        while rest and rest[0].strip() == "":
+            rest = rest[1:]
+        preamble = preamble + ([""] if rest else [])
+    merged = out_prefix + header_lines + preamble + rest
 
     text = "\n".join(merged)
     if trailing_nl or text == "":
@@ -337,19 +469,24 @@ def repair_md(content: str, year: int) -> tuple[str, bool]:
     body = content[len(bom) :]
 
     m = _md_header_rx().match(body)
-    if m is not None and _md_inner_matches_corpus(m.group(1), year):
+    rest = body[m.end() :] if m is not None else body
+    # Drop any further SPDX HTML-comment headers stacked after the first.
+    duplicates = 0
+    while True:
+        dup = _md_header_rx().match(rest.lstrip("\n"))
+        if dup is None:
+            break
+        rest = rest.lstrip("\n")[dup.end() :]
+        duplicates += 1
+    if m is not None and duplicates == 0 and _md_inner_matches_corpus(m.group(1), year):
         return content, False
 
     fresh = md_header_text(year)
-    if m is not None:
-        new_body = fresh + body[m.end() :].lstrip("\n")
-    else:
-        new_body = fresh + body.lstrip("\n")
+    new_body = fresh + rest.lstrip("\n")
 
     out = bom + new_body
-    if content.endswith("\n") or not content:
-        if not out.endswith("\n"):
-            out += "\n"
+    if (content.endswith("\n") or not content) and not out.endswith("\n"):
+        out += "\n"
     return out, True
 
 
@@ -406,8 +543,8 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
             changed_count += 1
     if args.check and changed_count > 0:
         print(
-            f"error: {changed_count} file(s) missing or incomplete license_header corpus "
-            "(run without --check to fix)",
+            f"error: {changed_count} file(s) with a missing, incomplete, "
+            "or duplicated license_header corpus (run without --check to fix)",
             file=sys.stderr,
         )
         return 1
@@ -450,10 +587,107 @@ def run_self_test() -> int:
     if not changed or fixed_spdx_only.splitlines()[: len(expected_cpp)] != expected_cpp:
         failures.append("SPDX-only header must be rejected; full corpus required")
 
-    partial = "\n".join(expected_cpp[:3] + ["", "int x;"]) + "\n"
+    partial = "\n".join([*expected_cpp[:3], "", "int x;"]) + "\n"
     fixed_partial, changed = repair_cpp(partial, year)
     if not changed or fixed_partial.splitlines()[: len(expected_cpp)] != expected_cpp:
         failures.append("partial license_header corpus must be rejected")
+
+    good_cpp = "\n".join([*expected_cpp, "", "int x;"]) + "\n"
+    block_header = (
+        "/* SPDX-License-Identifier: Apache-2.0 */\n"
+        "/*\n"
+        " * Copyright (C) 2026 Nero Duality, LLC.\n"
+        " *\n"
+        ' * Licensed under the Apache License, Version 2.0 (the "License");\n'
+        " * limitations under the License.\n"
+        " */\n"
+    )
+    stacked = "\n".join(expected_cpp) + "\n\n" + block_header + "\nint x;\n"
+    fixed_stacked, changed = repair_cpp(stacked, year)
+    if not changed or fixed_stacked != good_cpp:
+        failures.append("// corpus followed by a /* */ license block must drop the duplicate")
+    fixed_block_only, changed = repair_cpp(block_header + "\nint x;\n", year)
+    if not changed or fixed_block_only != good_cpp:
+        failures.append("/* */ license header must be replaced, not stacked under the // corpus")
+    twice = "\n".join(expected_cpp) + "\n\n" + "\n".join(expected_cpp) + "\n\nint x;\n"
+    fixed_twice, changed = repair_cpp(twice, year)
+    if not changed or fixed_twice != good_cpp:
+        failures.append("a second // license run must be dropped")
+    kept = (
+        "\n".join(expected_cpp)
+        + "\n\n/* Harness notes: see limitations under the License. */\nint x;\n"
+    )
+    _, changed = repair_cpp(kept, year)
+    if changed:
+        failures.append("a single non-license comment echoing one corpus line must be kept")
+    _, changed = repair_cpp(good_cpp, year)
+    if changed:
+        failures.append("duplicate-header repair must be idempotent")
+
+    lead = '#include "cbmc.h"\n\n'
+    good_lead = "\n".join([*expected_cpp, "", '#include "cbmc.h"', "", "int x;"]) + "\n"
+    lead_dup = lead + "\n".join(expected_cpp) + "\n\n" + block_header + "\nint x;\n"
+    fixed_lead, changed = repair_cpp(lead_dup, year)
+    if not changed or fixed_lead != good_lead:
+        failures.append("code before a duplicated header must move below the header")
+    fixed_moved, changed = repair_cpp(lead + good_cpp, year)
+    if not changed or fixed_moved != good_lead:
+        failures.append("code before a correct header must move below the header")
+    _, changed = repair_cpp(good_lead, year)
+    if changed:
+        failures.append("moved-header repair must be idempotent")
+    partial_lead = lead + "// SPDX-License-Identifier: Apache-2.0\n\nint x;\n"
+    fixed_partial_lead, changed = repair_cpp(partial_lead, year)
+    if not changed or fixed_partial_lead != good_lead:
+        failures.append("code before an incomplete header must move below the header")
+    chatter = (
+        "\n".join(expected_cpp)
+        + "\n\n/* See limitations under the License.\n"
+        + " * Also limitations under the License.\n */\nint x;\n"
+    )
+    _, changed = repair_cpp(chatter, year)
+    if changed:
+        failures.append("a comment that only contains the last corpus sentence must be kept")
+
+    good_hash = "#!/usr/bin/env bash\n" + "\n".join(expected_hash) + "\n\necho ok\n"
+    hash_twice = (
+        "#!/usr/bin/env bash\n"
+        + "\n".join(expected_hash)
+        + "\n\n"
+        + "\n".join(expected_hash)
+        + "\n\necho ok\n"
+    )
+    fixed_hash_twice, changed = repair_hash(hash_twice, year)
+    if not changed or fixed_hash_twice != good_hash:
+        failures.append("a second # license run must be dropped")
+    hash_kept = (
+        "#!/usr/bin/env bash\n"
+        + "\n".join(expected_hash)
+        + "\n\n# Env overrides: FOO, BAR\necho ok\n"
+    )
+    _, changed = repair_hash(hash_kept, year)
+    if changed:
+        failures.append("ordinary # comments after the corpus must be kept")
+
+    docker_good = "# syntax=docker/dockerfile:1.7\n" + "\n".join(expected_hash) + "\n\nFROM x\n"
+    _, changed = repair_hash(docker_good, year)
+    if changed:
+        failures.append("a Dockerfile parser directive above the header must stay first")
+    fixed_docker, changed = repair_hash("# syntax=docker/dockerfile:1.7\nFROM x\n", year)
+    if not changed or fixed_docker != docker_good:
+        failures.append("the header must go below a Dockerfile parser directive")
+    cookie = "#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\n"
+    _, changed = repair_hash(cookie + "\n".join(expected_hash) + "\n\nx = 1\n", year)
+    if changed:
+        failures.append("a PEP 263 encoding cookie above the header must stay on line 2")
+    fixed_include, _ = repair_cpp('#include "x.h"\n' + good_cpp, year)
+    if not fixed_include.startswith("// SPDX-License-Identifier:"):
+        failures.append("a C #include is code, not a top-of-file directive")
+
+    md_good = md_header_text(year) + "# Title\n"
+    fixed_md_twice, changed = repair_md(md_header_text(year) + md_good, year)
+    if not changed or fixed_md_twice != md_good:
+        failures.append("a second Markdown SPDX comment header must be dropped")
 
     repaired_md, changed = repair_md("# Title\n", year)
     if not changed or not repaired_md.startswith("<!-- SPDX-License-Identifier: Apache-2.0 -->"):
@@ -475,10 +709,7 @@ def run_self_test() -> int:
         keep.write_text("int vendor;\n", encoding="utf-8")
         scan.write_text("int project;\n", encoding="utf-8")
 
-        targets = {
-            path.name
-            for path in iter_targets([scan])
-        }
+        targets = {path.name for path in iter_targets([scan])}
         if "vendor.c" in targets:
             failures.append("target walk must honor .gitignore directory pruning")
         if "src.c" not in targets:
@@ -491,4 +722,3 @@ def run_self_test() -> int:
         return 1
     print("license-headers self-test: OK")
     return 0
-

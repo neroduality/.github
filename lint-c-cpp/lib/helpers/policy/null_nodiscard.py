@@ -106,14 +106,13 @@ def strip_comments_and_strings(line: str) -> str:
     return line
 
 
-def canonical_null_define_allowed(path: Path, line: str, policy: NullPolicy, config: PolicyConfig) -> bool:
+def canonical_null_define_allowed(
+    path: Path, line: str, policy: NullPolicy, config: PolicyConfig
+) -> bool:
     if not config.has(path, K_CANONICAL_NULL):
         return False
     stripped = strip_comments_and_strings(line)
-    return bool(
-        policy.null_define.search(stripped)
-        or policy.null_define_null.search(stripped)
-    )
+    return bool(policy.null_define.search(stripped) or policy.null_define_null.search(stripped))
 
 
 def merge_bool_decl_lines(lines: list[str], policy: NullPolicy) -> list[tuple[int, str]]:
@@ -141,9 +140,7 @@ def merge_bool_decl_lines(lines: list[str], policy: NullPolicy) -> list[tuple[in
 def is_struct_or_field(decl: str) -> bool:
     if "(" not in decl and ";" in decl:
         return True
-    if re.search(r"\bbool\s+\w+\s*\{", decl):
-        return True
-    return False
+    return bool(re.search(r"\bbool\s+\w+\s*\{", decl))
 
 
 def has_nodiscard(decl: str, policy: NullPolicy) -> bool:
@@ -176,12 +173,22 @@ def scan_nodiscard_header(path: Path, policy: NullPolicy) -> list[str]:
     return issues
 
 
+def _source_lines(text: str) -> list[str]:
+    r"""Split on "\n" only (read_text has already turned \r\n and \r into \n).
+
+    strip_code keeps every "\n" but blanks the other characters splitlines()
+    breaks on (\f, \v, U+2028 inside a comment or string), so the raw and masked
+    texts only stay line-aligned when both are split this way.
+    """
+    return text.split("\n")
+
+
 def scan_null_tokens(path: Path, policy: NullPolicy, config: PolicyConfig) -> list[str]:
     issues: list[str] = []
     raw = path.read_text(encoding="utf-8", errors="replace")
-    raw_lines = raw.splitlines()
-    code_lines = strip_code(raw).splitlines()
-    for i, (line, code) in enumerate(zip(raw_lines, code_lines), 1):
+    raw_lines = _source_lines(raw)
+    code_lines = _source_lines(strip_code(raw))
+    for i, (line, code) in enumerate(zip(raw_lines, code_lines, strict=True), 1):
         if canonical_null_define_allowed(path, line, policy, config):
             continue
         if RAW_NULL.search(code):
@@ -212,7 +219,7 @@ def scan_null_include(path: Path, policy: NullPolicy, config: PolicyConfig) -> l
         sorted(h for h in policy.null_includes if h != policy.canonical_header)[:3]
     )
     return [
-        f"{path}: missing #include \"{policy.canonical_header}\" "
+        f'{path}: missing #include "{policy.canonical_header}" '
         f"(or {alt_headers}) for {policy.null_macro}"
     ]
 
@@ -220,9 +227,9 @@ def scan_null_include(path: Path, policy: NullPolicy, config: PolicyConfig) -> l
 def scan_standalone_nullptr(path: Path, policy: NullPolicy, config: PolicyConfig) -> list[str]:
     issues: list[str] = []
     raw = path.read_text(encoding="utf-8", errors="replace")
-    raw_lines = raw.splitlines()
-    code_lines = strip_code(raw).splitlines()
-    for i, (line, code) in enumerate(zip(raw_lines, code_lines), 1):
+    raw_lines = _source_lines(raw)
+    code_lines = _source_lines(strip_code(raw))
+    for i, (line, code) in enumerate(zip(raw_lines, code_lines, strict=True), 1):
         if canonical_null_define_allowed(path, line, policy, config):
             continue
         if STANDALONE_NULLPTR.search(code):
@@ -236,9 +243,7 @@ def scan_nodiscard_on_fields(path: Path, policy: NullPolicy, config: PolicyConfi
     issues: list[str] = []
     for i, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         if policy.nodiscard_on_field.search(line):
-            issues.append(
-                f"{path}:{i}: {policy.nodiscard_macro} on data member (functions only)"
-            )
+            issues.append(f"{path}:{i}: {policy.nodiscard_macro} on data member (functions only)")
     return issues
 
 

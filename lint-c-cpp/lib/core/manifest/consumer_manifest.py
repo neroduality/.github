@@ -29,7 +29,7 @@ from typing import Any
 try:
     import yaml
 except ImportError:
-    yaml = None  # type: ignore[assignment]
+    yaml = None
 
 _MANIFEST_NAME = "lint-c-cpp.yaml"
 
@@ -91,9 +91,7 @@ def enabled_lint_jobs(repo_root: Path) -> frozenset[str]:
     if not isinstance(raw, list):
         return frozenset()
     return frozenset(
-        item.strip()
-        for item in raw
-        if isinstance(item, str) and item.strip() in KNOWN_LINT_JOBS
+        item.strip() for item in raw if isinstance(item, str) and item.strip() in KNOWN_LINT_JOBS
     )
 
 
@@ -164,7 +162,7 @@ def _gitignore_dir_names(repo_root: Path) -> frozenset[str]:
 
     for raw in gitignore.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("!"):
+        if not line or line.startswith(("#", "!")):
             continue
         if not line.endswith("/"):
             continue  # file pattern (or ambiguous) -- not a directory prune
@@ -455,9 +453,7 @@ def compile_db_firmware_tree_prefixes(repo_root: Path) -> frozenset[str]:
 
 def _cmake_root_under_firmware_tree(rel: Path, prefixes: frozenset[str]) -> bool:
     rel_posix = rel.as_posix()
-    return any(
-        rel_posix == prefix or rel_posix.startswith(f"{prefix}/") for prefix in prefixes
-    )
+    return any(rel_posix == prefix or rel_posix.startswith(f"{prefix}/") for prefix in prefixes)
 
 
 def _firmware_entry_covers_cmake_root(entry: dict[str, Any], cmake_root: Path) -> bool:
@@ -472,15 +468,15 @@ def discover_cmake_project_roots(repo_root: Path) -> list[Path]:
 
     repo_root = repo_root.resolve()
     candidates = [
-        path.parent.relative_to(repo_root) for path in resolve_scan_paths(JOB_CMAKE, repo_root=repo_root)
+        path.parent.relative_to(repo_root)
+        for path in resolve_scan_paths(JOB_CMAKE, repo_root=repo_root)
     ]
     candidates.sort(key=lambda rel: (len(rel.parts), rel.as_posix()))
     outermost: list[Path] = []
     for rel in candidates:
         rel_posix = rel.as_posix()
         if any(
-            other != rel and rel_posix.startswith(f"{other.as_posix()}/")
-            for other in candidates
+            other != rel and rel_posix.startswith(f"{other.as_posix()}/") for other in candidates
         ):
             continue
         cmake_lists = repo_root / rel / "CMakeLists.txt"
@@ -498,7 +494,9 @@ def compile_db_cmake_coverage_issues(repo_root: Path) -> list[str]:
     issues: list[str] = []
     firmware_prefixes = compile_db_firmware_tree_prefixes(repo_root)
     firmware_source_roots = firmware_compile_source_roots(repo_root)
-    host_entries = {str(entry["source"]): entry for entry in compile_db_userspace_entries(repo_root)}
+    host_entries = {
+        str(entry["source"]): entry for entry in compile_db_userspace_entries(repo_root)
+    }
     firmware_entries = compile_db_firmware_entries(repo_root)
 
     for rel in discover_cmake_project_roots(repo_root):
@@ -514,13 +512,11 @@ def compile_db_cmake_coverage_issues(repo_root: Path) -> list[str]:
         # Arduino-style: OpenSSF CMake adoption under firmware/ while compile_commands.json
         # lives out-of-tree (e.g. build/lint/firmware/). Covered by any firmware entry.
         if any(
-            rel_posix == root or rel_posix.startswith(f"{root}/")
-            for root in firmware_source_roots
+            rel_posix == root or rel_posix.startswith(f"{root}/") for root in firmware_source_roots
         ):
             if not firmware_entries:
                 issues.append(
-                    "discovered firmware CMake root "
-                    f"{rel_posix!r} has no compile_db.firmware entry"
+                    f"discovered firmware CMake root {rel_posix!r} has no compile_db.firmware entry"
                 )
             continue
         if rel_posix not in host_entries:
@@ -575,7 +571,9 @@ def load_lint_kit_cppcheck_manifest(lint_kit: Path) -> dict[str, Any]:
     return data
 
 
-def _cppcheck_unknown_keys(mapping: dict[str, Any], allowed: frozenset[str], label: str) -> list[str]:
+def _cppcheck_unknown_keys(
+    mapping: dict[str, Any], allowed: frozenset[str], label: str
+) -> list[str]:
     unknown = sorted(key for key in mapping if key not in allowed)
     if not unknown:
         return []
@@ -605,7 +603,9 @@ def validate_cppcheck_manifest(data: dict[str, Any]) -> list[str]:
     else:
         for index, item in enumerate(raw_passes):
             if not isinstance(item, dict):
-                issues.append(f"config/cppcheck-manifest.yaml: cppcheck.passes[{index}] must be a mapping")
+                issues.append(
+                    f"config/cppcheck-manifest.yaml: cppcheck.passes[{index}] must be a mapping"
+                )
                 continue
             issues.extend(
                 _cppcheck_unknown_keys(
@@ -625,7 +625,9 @@ def _normalize_cppcheck_passes(block: dict[str, Any]) -> list[dict[str, Any]]:
 
     raw = block.get("passes")
     if not isinstance(raw, list) or not raw:
-        raise ValueError("cppcheck.passes must be a non-empty list in config/cppcheck-manifest.yaml")
+        raise ValueError(
+            "cppcheck.passes must be a non-empty list in config/cppcheck-manifest.yaml"
+        )
     allowed_jobs = frozenset({JOB_SOURCE})
     passes: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
@@ -661,7 +663,9 @@ def _lint_kit_cppcheck_defaults(lint_kit: Path) -> dict[str, Any]:
         },
         "flags": [str(item) for item in cli.get("flags", []) if isinstance(item, str)],
         "enable": [str(item) for item in cli.get("enable", []) if isinstance(item, str)],
-        "suppressions": [str(item) for item in cli.get("suppressions", []) if isinstance(item, str)],
+        "suppressions": [
+            str(item) for item in cli.get("suppressions", []) if isinstance(item, str)
+        ],
     }
 
 
@@ -687,8 +691,6 @@ def shared_c_cxx_source_roots(repo_root: Path) -> tuple[str, ...]:
     All ``.c`` still uses ``.clang-tidy-c``. Host-only C++ stays on ``.clang-tidy-cxx``.
     """
     policy = section(repo_root, "policy")
-    if not isinstance(policy, dict):
-        return ()
     roots = policy.get("shared_c_cxx_source_roots", [])
     if not isinstance(roots, list):
         return ()
@@ -832,8 +834,7 @@ def iter_headers_for_role(
     return sorted(
         path
         for path in scan_paths
-        if path.suffix.lower()
-        in (C_COMPATIBLE_HEADER_SUFFIXES | CXX_ONLY_HEADER_SUFFIXES)
+        if path.suffix.lower() in (C_COMPATIBLE_HEADER_SUFFIXES | CXX_ONLY_HEADER_SUFFIXES)
         and header_role_for_path(path, repo_root) == role
     )
 
@@ -915,8 +916,7 @@ def cxx_in_c_compatible_header_violations(
         if _CXX_IN_C_HEADER_RE.search(_strip_c_comments_for_header_role_scan(text)):
             rel = source_key(path, repo_root) or path.as_posix()
             violations.append(
-                f"{rel}: C++ surface in .h classified c_compatible -- "
-                "rename to .hpp/.hh/.hxx"
+                f"{rel}: C++ surface in .h classified c_compatible -- rename to .hpp/.hh/.hxx"
             )
     return violations
 
@@ -1104,8 +1104,6 @@ def spec_traceability_path(repo_root: Path) -> Path | None:
 def yamllint_manifest_paths(repo_root: Path) -> tuple[list[Path], list[str]]:
     """Resolved paths from yamllint.files (authoritative when configured)."""
     yamllint = section(repo_root, "yamllint")
-    if not isinstance(yamllint, dict):
-        return [], []
     files = yamllint.get("files", [])
     if not isinstance(files, list) or not files:
         return [], []
@@ -1187,10 +1185,16 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("compile-db-projects", help="Print compile_db entries as JSON lines")
-    sub.add_parser("clang-tidy-overlays", help="Print auto-discovered clang-tidy overlays as JSON lines")
+    sub.add_parser(
+        "clang-tidy-overlays", help="Print auto-discovered clang-tidy overlays as JSON lines"
+    )
     sub.add_parser("scan-source-roots", help="Print scan.source_roots entries")
-    sub.add_parser("hardening-cmake-roots", help="Print auto-discovered hardening CMake roots as JSON lines")
-    scan_paths = sub.add_parser("scan-paths", help="Print repo-relative paths for a scan job profile")
+    sub.add_parser(
+        "hardening-cmake-roots", help="Print auto-discovered hardening CMake roots as JSON lines"
+    )
+    scan_paths = sub.add_parser(
+        "scan-paths", help="Print repo-relative paths for a scan job profile"
+    )
     scan_paths.add_argument(
         "job",
         choices=(

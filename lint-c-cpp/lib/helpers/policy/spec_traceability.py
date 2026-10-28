@@ -133,8 +133,7 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
             errors.append(f"constants[{index}]: symbol must be a non-empty string")
             continue
         if spec_value_raw is None or (
-            not isinstance(spec_value_raw, (str, int))
-            and not isinstance(spec_value_raw, float)
+            not isinstance(spec_value_raw, (str, int)) and not isinstance(spec_value_raw, float)
         ):
             errors.append(f"constants[{index}] {symbol}: spec_value must be a string or number")
             continue
@@ -160,9 +159,7 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
         live_raw = define_cache.get(rel, {}).get(symbol)
         if live_raw is None:
             elsewhere = [
-                other
-                for other, defs in define_cache.items()
-                if other != rel and symbol in defs
+                other for other, defs in define_cache.items() if other != rel and symbol in defs
             ]
             if elsewhere:
                 errors.append(
@@ -177,7 +174,8 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
             errors.append(
                 f"[{spec_prefix}] {symbol}: definition spans multiple lines in "
                 f"{source} (line continuation). Manifest constants must be a "
-                f"single-line #define, enum, or constexpr/const literal -- move any trailing comment "
+                "single-line #define, enum, or constexpr/const literal -- move any trailing "
+                "comment "
                 f"to its own line above the definition.",
             )
             continue
@@ -230,8 +228,10 @@ def run(config: PolicyConfig, paths: list[Path], extras: list[str]) -> int:
         )
         return 1
 
-    print(f"spec traceability: {len(constants)} constants OK "
-          f"(scanned {len(define_cache)} source files)")
+    print(
+        f"spec traceability: {len(constants)} constants OK "
+        f"(scanned {len(define_cache)} source files)"
+    )
     return 0
 
 
@@ -260,7 +260,9 @@ def normalize_value(raw: str) -> tuple[int | None, str]:
     return parse_int(token), token
 
 
-def scan_repo_defines(config: PolicyConfig, source_paths: list[Path]) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+def scan_repo_defines(
+    config: PolicyConfig, source_paths: list[Path]
+) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
     """Index numeric constants from the central source scan-paths list."""
     by_path: dict[str, dict[str, str]] = {}
     text_cache: dict[str, str] = {}
@@ -408,4 +410,3 @@ def self_test() -> int:
     assert any("spec_prefix is not cited" in err for err in source_errors), source_errors
     print("spec-traceability-check self-test: OK")
     return 0
-

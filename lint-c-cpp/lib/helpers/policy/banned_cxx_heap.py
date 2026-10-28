@@ -44,12 +44,21 @@ HEAP_CXX_NEW = re.compile(
 _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
     "heap_new.cpp": ("struct S{}; void f(){auto*p=new S; delete p;}\n", {"heap_new.cpp"}),
     "heap_new_array.cpp": ("void f(){auto*p=new int[4]; delete[] p;}\n", {"heap_new_array.cpp"}),
-    "heap_placement_new.cpp": ("struct S{}; void f(void* a){auto*p=new (a) S; (void)p;}\n", {"heap_placement_new.cpp"}),
-    "heap_delete_paren.cpp": ("struct S{}; void f(S* p){ delete (p); }\n", {"heap_delete_paren.cpp"}),
+    "heap_placement_new.cpp": (
+        "struct S{}; void f(void* a){auto*p=new (a) S; (void)p;}\n",
+        {"heap_placement_new.cpp"},
+    ),
+    "heap_delete_paren.cpp": (
+        "struct S{}; void f(S* p){ delete (p); }\n",
+        {"heap_delete_paren.cpp"},
+    ),
     "not_delete_ident_ok.cpp": ("int deleteEntry(int x){ return x; }\n", set()),
     "malloc_ok.c": ("void f(void){void*p=malloc(16); free(p);}\n", set()),
     "brace_init_ok.cpp": ("struct S{int x;}; void f(){S s{}; (void)s;}\n", set()),
-    "param_new_mode.cpp": ("enum E{A,B}; void f(E new_mode){(void)new_mode; g_mode=new_mode;}\n", set()),
+    "param_new_mode.cpp": (
+        "enum E{A,B}; void f(E new_mode){(void)new_mode; g_mode=new_mode;}\n",
+        set(),
+    ),
     "split_new.cpp": ("struct S{}; void f(){auto*p=new\n S; delete p;}\n", {"split_new.cpp"}),
     "st25_new_bad.cpp": ("struct S{}; void f(){auto*p=new S; delete p;}\n", {"st25_new_bad.cpp"}),
 }
@@ -66,8 +75,14 @@ def scan_file(path: Path) -> list[str]:
     raw_text = path.read_text(encoding="utf-8", errors="replace")
     text = blank_comments_and_strings(raw_text)
     for regex, message in (
-        (HEAP_CXX_NEW, "C++ heap allocation (use stack/static buffers; new is forbidden in project code)"),
-        (HEAP_CXX_DELETE, "C++ heap delete (use stack/static buffers; delete is forbidden in project code)"),
+        (
+            HEAP_CXX_NEW,
+            "C++ heap allocation (use stack/static buffers; new is forbidden in project code)",
+        ),
+        (
+            HEAP_CXX_DELETE,
+            "C++ heap delete (use stack/static buffers; delete is forbidden in project code)",
+        ),
     ):
         for match in regex.finditer(text):
             issue = scan_match(path, text, match, message)
@@ -84,10 +99,12 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core, include]\n"
         "policy:\n  unsafe_api:\n    header: sample_null.h\n"
-        "    include_headers: [attrs.h]\n    wrapper_files:\n      - include/sample/cxx_heap_sink.cpp\n",
+        "    include_headers: [attrs.h]\n    wrapper_files:\n"
+        "      - include/sample/cxx_heap_sink.cpp\n",
         encoding="utf-8",
     )
     core = root / "core"

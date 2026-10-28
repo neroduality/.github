@@ -28,7 +28,7 @@ Sources: [References](#references).
 | OpenSSF | Compiler/linker hardening only |
 | Naming | Shared constants `ALL_CAPS`; C++-only `kCamelCase` |
 
-**Consumer manifest keys**
+## Consumer manifest keys
 
 | Status | Keys |
 | --- | --- |
@@ -45,6 +45,7 @@ Sources: [References](#references).
 | `.clang-tidy-shared-c-cxx` | C++ under `policy.shared_c_cxx_source_roots` |
 | `.clang-tidy-unsafe-c` / `-cxx` | Banned APIs only |
 | `openssf-hardening-manifest.yaml` | OpenSSF coverage + FULL cmake wiring |
+| `openssf-guide-tables.txt` | Snapshot of the guide's Table 1 and Table 2 tokens; self-test asserts the manifest covers every row |
 | `cppcheck-manifest.yaml` | cppcheck passes / CLI |
 | `ruff.toml` / `mypy.ini` | Python lint (`python_lint` job) config |
 | `.markdownlint.yaml` | Markdownlint defaults |
@@ -81,7 +82,7 @@ Lint section banners print the job ID for mapping to this table, e.g.
 
 | ID | Section |
 | --- | --- |
-| `license` | License / SPDX headers |
+| `license` | License / SPDX headers (full `license_header` corpus, exactly once; stacked or legacy `/* */` headers are collapsed) |
 | `yamllint` | YAML sort/format |
 | `markdownlint` | Markdown |
 | `format` | clang-format, shfmt, shellcheck, codespell, ruff, mypy |
@@ -116,6 +117,16 @@ Required keys (each with `add`, `remove`, `by_compile_db`; use `null` if unused)
 | `clang-tidy-*` | Checks entries |
 | `cppcheck` | Enable / suppress ids |
 | `openssf-hardening` | `coverage.flags` / defs -> lint audit + `cmake/` emit |
+
+`openssf-hardening` also accepts an optional `cross` list (no other key does):
+host-only link flags to emit on cross builds too. Vocabulary is exactly the
+kit's host-only set: `LINKER:-z,pack-relative-relocs` (probe-gated; the sysroot
+libc probe still applies, so opting in is safe when the cross sysroot's glibc is
+>= 2.36 and a no-op otherwise) plus the dynamic-loader link flags `-pie`,
+`LINKER:-z,noexecstack`, `LINKER:-z,now`, `LINKER:-z,relro` (genex-gated; only
+the `CMAKE_CROSSCOMPILING` term is lifted, `-pie` keeps its EXECUTABLE term).
+Anything else is a manifest error. Linux userspace cross ports (foreign-arch
+deb/rpm) opt all five in; bare-metal firmware consumers leave `cross` null.
 
 ## clang-format
 
@@ -177,6 +188,15 @@ CamelCase. C++ omits `google-runtime-int`, `google-build-explicit-make-pair`,
 
 Kit file: `openssf-hardening-manifest.yaml` (do not edit).
 
+Deliberate additions beyond the guide's tables: `-ffunction-sections`,
+`-fdata-sections`, `LINKER:--gc-sections`, `LINKER:-z,pack-relative-relocs`,
+`LINKER:-z,text`, `LINKER:--error-execstack`, `LINKER:--error-rwx-segments`,
+`-Wshadow`, `-Wundef`, `-Wformat-signedness`, `-Werror=vla`, `-Walloca`,
+`-Wstrict-prototypes`, and `-Wold-style-definition`. They ride the same probes,
+dials, and audit as the guide flags. `-fzero-init-padding-bits=unions` is the
+guide row the guide spells `union`, which GCC rejects. Blanket `-Werror` is
+wrapped in `HARDENING_WERROR` (default ON; source packages pass OFF).
+
 | Key | Meaning |
 | --- | --- |
 | `coverage.*` | Tokens required by lint audit and used by dialed emit |
@@ -200,9 +220,12 @@ vars to the board's extra-flags Make variable (often `build.extra_flags`).
 | Rule | Detail |
 | --- | --- |
 | `compile_arch` | Host + arch gated; not ungated on cross |
+| Host-only link | `-z pack-relative-relocs` = linker probe AND `HAVE_LIBC_DT_RELR` (sysroot glibc >= 2.36) AND native; `-z text`, `--error-execstack`, `--error-rwx-segments` = linker probe AND native; `-pie` / `-z noexecstack` / `-z now` / `-z relro` = native (plus EXECUTABLE for `-pie`); `-fexceptions` = native; `overrides.openssf-hardening.cross` drops the native term per flag |
 | Probes | Fail-closed only if cache has OpenSSF `HAVE_*` |
-| CXX + `-fhardened` | Overlapping defs use `NOT_FHARDENED` |
-| Link audit | `link.txt` or `build.ninja` |
+| `-z` link probes | `check_linker_flag` then a bare-spelling re-link; demoted when GNU ld answers `-z <keyword> ignored` (e.g. no DT_RELR for the target) |
+| CXX + `-fhardened` | Overlapping defs and CXX fortify use `NOT_FHARDENED` → `HAVE_CXX_FHARDENED` (C uses `HAVE_C_FHARDENED`) |
+| Link audit | Each link command in `link.txt`, or each executable / shared link statement in `build.ninja` |
+| In effect | Compile and link audits match whole options and apply last-one-wins: a later `-fno-stack-protector`, `-U_FORTIFY_SOURCE`, `-O0`, `-Wno-error`, `-Wl,-z,lazy` or `-no-pie` fails the flag it overrides |
 
 ## cppcheck
 
@@ -236,6 +259,33 @@ ground is delegated to the tools; the table records the split.
 | `raii_lifetime` | `clang-analyzer-unix.Malloc` style leak paths | Project acquire/release pair registry (`policy.resource_lifetime`) |
 | `nolint_audit` | -- (meta) | Forbids `NOLINT` / `cppcheck-suppress`; keeps both engines honest |
 | `spec_traceability` | -- | Spec manifest <-> source literal cross-check |
+
+## Linting the kit itself
+
+Consumer lint never scans the kit, so run its own checks from `lint-c-cpp/`
+before tagging. Shell uses the consumer `format` job's flags; ruff and mypy run
+through `uvx` at the `tool-versions.yaml` minimums.
+
+```bash
+source lib/helpers/toolchain/tool_versions.sh
+ruff="ruff@$(lint_kit_tool_min_version ruff)"
+mypy="mypy@$(lint_kit_tool_min_version mypy)"
+
+# Unit tests for every lint job and generator.
+bash lint-c-cpp.sh self-test
+
+# Shell: format check and lint (shfmt -w instead of -d rewrites).
+shfmt -d -i 2 -ci -s $(git ls-files '*.sh')
+shellcheck -S warning -x -P SCRIPTDIR $(git ls-files '*.sh')
+
+# Python: format check, lint, types (drop --check to rewrite; ruff check --fix).
+uvx "$ruff" format --config config/ruff.toml --check .
+uvx "$ruff" check --config config/ruff.toml .
+uvx "$mypy" --config-file config/mypy.ini --no-incremental lib
+
+# Markdown.
+markdownlint --config config/.markdownlint.yaml config/README.md
+```
 
 ## References
 

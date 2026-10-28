@@ -282,6 +282,12 @@ lint_kit_shfmt_fail_on_change() {
   local scanned
   scanned="$(lint_kit_count_existing_files "${files[@]}")"
 
+  # shfmt 3.7 and 3.14 disagree on the spacing of a negated arithmetic test,
+  # so a script that uses one cannot pass both. "((x == 0))" is stable.
+  if grep -nE '\(\(!' "${files[@]}" >&2; then
+    printf 'error: shfmt versions disagree on a negated arithmetic test; write ((x == 0))\n' >&2
+    return 1
+  fi
   lint_kit_with_fail_on_change "shfmt reformatted shell scripts" "${files[@]}" -- \
     shfmt -w -i 2 -ci -s "${files[@]}" || return 1
   shfmt -d -i 2 -ci -s "${files[@]}"

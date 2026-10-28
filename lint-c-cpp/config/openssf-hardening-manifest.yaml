@@ -41,12 +41,17 @@
 # Emit notes
 # ----------
 # - compile_arch (e.g. -fcf-protection): host + arch gated; never ungated on cross.
-# - CXX defs already implied by -fhardened use NOT_FHARDENED (avoids -Werror=hardened).
+# - NOT_FHARDENED is per language (HAVE_{LANG}_FHARDENED). CXX fortify flags and
+#   the C++ stdlib defs already implied by -fhardened follow HAVE_CXX_FHARDENED
+#   (avoids -Werror=hardened). The C probe does not stand in for the CXX one.
+# - -fhardened / -Whardened: probe AND NOT instrumented sanitizer AND the same
+#   optimized configs as _FORTIFY_SOURCE (at -O0, -fhardened cannot enable
+#   _FORTIFY_SOURCE and -Whardened turns that into a -Werror failure).
 # - Lint also materializes a dialed openssf-hardening-manifest.yaml under
 #   build/lint-overrides/ for the audit; that is not a substitute for cmake/.
 
 guide:
-  date: "2026-06-30"
+  date: "2026-08-20"
   url: "https://best.openssf.org/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C++.html"
   normative_tables: [1, 2]
 
@@ -62,12 +67,22 @@ coverage:
     - -Wtrampolines
     - -Wimplicit-fallthrough
     - -Wbidi-chars=any
+    # -Werror=vla enables -Wvla; do not also list the plain warning form.
+    - -Werror=vla
+    - -Walloca
+    - -Wshadow
+    - -Wundef
+    - -Wformat-signedness
+    - -Wstrict-prototypes
+    - -Wold-style-definition
     - -Werror
     - -Werror=format-security
     - -Werror=implicit
     - -Werror=incompatible-pointer-types
     - -Werror=int-conversion
     - -O2
+    - -ffunction-sections
+    - -fdata-sections
     - -U_FORTIFY_SOURCE
     - -D_FORTIFY_SOURCE=3
     - -fstrict-flex-arrays=3
@@ -75,10 +90,16 @@ coverage:
     - -fstack-protector-strong
     - -fcf-protection=full
     - -mbranch-protection=standard
+    - -fzero-call-used-regs=used-gpr
     - "LINKER:-z,nodlopen"
     - "LINKER:-z,noexecstack"
     - "LINKER:-z,relro"
     - "LINKER:-z,now"
+    - "LINKER:--gc-sections"
+    - "LINKER:-z,pack-relative-relocs"
+    - "LINKER:-z,text"
+    - "LINKER:--error-execstack"
+    - "LINKER:--error-rwx-segments"
     - -fPIE
     - -pie
     - -fPIC
@@ -94,7 +115,7 @@ coverage:
     - -fzero-init-padding-bits=all
     - -Whardened
     - -Werror=trampolines
-    - -fzero-init-padding-bits=union
+    - -fzero-init-padding-bits=unions
   definitions:
     - _GLIBCXX_ASSERTIONS
     - _LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
@@ -136,6 +157,28 @@ cmake:
     compile_probe_gated:
       - flag: -Wbidi-chars=any
         probe: HAVE_{LANG}_WBIDI_CHARS_ANY
+      # Zero caller-used GPRs on return: limits register-resident data lifetime
+      # (the register half of a secure_clear) and ROP gadget value. The guide
+      # lists it for x86_64/aarch64; GCC also implements it on s390/ppc/riscv
+      # (release-dependent), so gate on the per-toolchain probe rather than an
+      # arch key -- unsupported targets fail the probe ("sorry, unimplemented")
+      # and omit it. Firmware toolchains without it dial it out per compile_db.
+      - flag: -fzero-call-used-regs=used-gpr
+        probe: HAVE_{LANG}_ZERO_CALL_USED_REGS
+      - flag: -ffunction-sections
+        probe: HAVE_{LANG}_FUNCTION_SECTIONS
+      - flag: -fdata-sections
+        probe: HAVE_{LANG}_DATA_SECTIONS
+      - flag: -Werror=vla
+        probe: HAVE_{LANG}_WERROR_VLA
+      - flag: -Walloca
+        probe: HAVE_{LANG}_WALLOCA
+      - flag: -Wshadow
+        probe: HAVE_{LANG}_WSHADOW
+      - flag: -Wundef
+        probe: HAVE_{LANG}_WUNDEF
+      - flag: -Wformat-signedness
+        probe: HAVE_{LANG}_WFORMAT_SIGNEDNESS
       - flag: -Wtrampolines
         probe: HAVE_{LANG}_WTRAMPOLINES
       - flag: -Werror=trampolines
@@ -148,7 +191,10 @@ cmake:
         probe: HAVE_{LANG}_TRIVIAL_AUTO_VAR_INIT_ZERO
       - flag: -fzero-init-padding-bits=all
         probe: HAVE_{LANG}_ZERO_INIT_PADDING_BITS_ALL
-      - flag: -fzero-init-padding-bits=union
+      # The guide's option table spells this "union"; GCC 15 accepts only "unions"
+      # (and the guide's own synopsis uses that spelling). Emitted only when
+      # =all is unavailable: both on one command line, and =unions wins.
+      - flag: -fzero-init-padding-bits=unions
         probe: HAVE_{LANG}_ZERO_INIT_PADDING_BITS_UNION
       - flag: -fhardened
         probe: HAVE_{LANG}_FHARDENED
@@ -157,8 +203,11 @@ cmake:
       - flag: -mbranch-protection=standard
         probe: HAVE_ARM_BRANCH_PROTECTION_STANDARD
     compile_genex_gated:
+      # Speed-optimized configs only: target options follow CMAKE_C_FLAGS_<CONFIG>,
+      # so -O2 would override MinSizeRel's -Os (which still optimizes enough for
+      # _FORTIFY_SOURCE). Debug keeps -O0.
       - flag: -O2
-        gate_requires: [CMAKE_CROSSCOMPILING]
+        gate_requires: [CMAKE_CROSSCOMPILING, CONFIG:Release, CONFIG:RelWithDebInfo]
       - flag: -U_FORTIFY_SOURCE
         gate_requires:
           [CMAKE_CROSSCOMPILING, CONFIG:Release, CONFIG:RelWithDebInfo, CONFIG:MinSizeRel, NOT_INSTRUMENTED_SANITIZER, NOT_FHARDENED]
@@ -176,7 +225,31 @@ cmake:
         probe: HAVE_LINK_NO_COPY_DT_NEEDED
       - flag: "LINKER:-z,nodlopen"
         probe: HAVE_LINK_Z_NODLOPEN
+      - flag: "LINKER:--gc-sections"
+        probe: HAVE_LINK_GC_SECTIONS
+      # Host-only by default (see OPENSSF_HOST_ONLY_FLAGS): DT_RELR needs a
+      # glibc >= 2.36 loader. Emitted only when the linker probe AND the sysroot
+      # libc probe (HAVE_LIBC_DT_RELR, features.h __GLIBC_PREREQ(2,36)) pass AND
+      # the build is native. The libc probe is required because GNU ld adds the
+      # GLIBC_ABI_DT_RELR verneed even against older glibc, so the link succeeds
+      # and the loader rejects the ELF. Consumers whose cross sysroots are known
+      # >= 2.36 lift the native term via policy.overrides.openssf-hardening.cross;
+      # bare-metal / firmware consumers additionally dial it out (with
+      # --gc-sections) per compile_db via by_compile_db.remove.
+      - flag: "LINKER:-z,pack-relative-relocs"
+        probe: HAVE_LINK_Z_PACK_RELATIVE_RELOCS
+      - flag: "LINKER:-z,text"
+        probe: HAVE_LINK_Z_TEXT
+      - flag: "LINKER:--error-execstack"
+        probe: HAVE_LINK_ERROR_EXECSTACK
+      - flag: "LINKER:--error-rwx-segments"
+        probe: HAVE_LINK_ERROR_RWX_SEGMENTS
     link_genex_gated:
+      # Host-only by default (see OPENSSF_HOST_ONLY_GENEX_FLAGS): these need an ELF
+      # dynamic loader, so bare-metal / firmware cross targets never see them. Linux
+      # userspace cross ports (deb/rpm foreign-arch packages) opt them back in via
+      # policy.overrides.openssf-hardening.cross, which lifts only the
+      # CMAKE_CROSSCOMPILING term (the TARGET_PROPERTY:TYPE term on -pie stays).
       - flag: -pie
         gate_requires: [TARGET_PROPERTY:TYPE, EXECUTABLE, CMAKE_CROSSCOMPILING]
       - flag: "LINKER:-z,noexecstack"
@@ -196,6 +269,10 @@ cmake:
         probe: HAVE_C_WERROR_INCOMPATIBLE_POINTER_TYPES
       - flag: -Werror=int-conversion
         probe: HAVE_C_WERROR_INT_CONVERSION
+      - flag: -Wstrict-prototypes
+        probe: HAVE_C_WSTRICT_PROTOTYPES
+      - flag: -Wold-style-definition
+        probe: HAVE_C_WOLD_STYLE_DEFINITION
     compile_genex_gated:
       - flag: -fexceptions
         gate_requires: [CMAKE_CROSSCOMPILING]
@@ -204,7 +281,8 @@ cmake:
     definitions_genex_gated:
       # -fhardened already enables these; explicit -D trips -Werror=hardened.
       - definition: _GLIBCXX_ASSERTIONS
-        gate_requires: [CMAKE_CROSSCOMPILING, CONFIG:Production, NOT_FHARDENED]
+        gate_requires:
+          [CMAKE_CROSSCOMPILING, CONFIG:Release, CONFIG:RelWithDebInfo, CONFIG:MinSizeRel, NOT_FHARDENED]
       - definition: _LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
         gate_requires: [CMAKE_CROSSCOMPILING, CONFIG:Production, NOT_FHARDENED]
       - definition: _LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE

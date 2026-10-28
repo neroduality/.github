@@ -34,19 +34,28 @@ _SUPPRESSION_TOKEN = re.compile(
 
 _SELF_TEST_CASES: dict[str, tuple[str, bool]] = {
     "clean.c": ("int ok(void) { return 0; }\n", False),
-    "bad_nextline.c": ("// NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized)\nint bad(void) { return 1; }\n", True),
+    "bad_nextline.c": (
+        "// NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized)\nint bad(void) { return 1; }\n",
+        True,
+    ),
     "bad_block_nextline.c": ("/* NOLINTNEXTLINE(example) */\nint fine(void) { return 0; }\n", True),
     "bad_nolint.c": ("int x; // NOLINT(readability)\n", True),
     "bad_nolint_bare.c": ("// NOLINT\nint y;\n", True),
     "bad_begin_end.c": (
-        "// NOLINTBEGIN(readability-magic-numbers)\nint a = 42;\n// NOLINTEND(readability-magic-numbers)\n",
+        (
+            "// NOLINTBEGIN(readability-magic-numbers)\nint a = 42;\n"
+            "// NOLINTEND(readability-magic-numbers)\n"
+        ),
         True,
     ),
     "bad_inline.c": ("int z = 0; /* NOLINTNEXTLINE */ int w = 1;\n", True),
     "bad_cppcheck.c": ("int x; // cppcheck-suppress constParameterPointer\n", True),
     "bad_cppcheck_bracket.c": ("// cppcheck-suppress[uninitvar]\nint y;\n", True),
     "bad_cppcheck_begin.c": (
-        "// cppcheck-suppress-begin knownConditionTrueFalse\nint a = 0;\n// cppcheck-suppress-end knownConditionTrueFalse\n",
+        (
+            "// cppcheck-suppress-begin knownConditionTrueFalse\nint a = 0;\n"
+            "// cppcheck-suppress-end knownConditionTrueFalse\n"
+        ),
         True,
     ),
     "bad_cppcheck_file.c": ("// cppcheck-suppress-file uninitvar\nint z;\n", True),
@@ -104,14 +113,19 @@ def prepare_self_test_repo(root: Path) -> None:
     core.mkdir(parents=True)
     for name, (content, _) in _SELF_TEST_CASES.items():
         (core / name).write_text(content, encoding="utf-8")
-    (core / "allowed.c").write_text("// NOLINTNEXTLINE(foo)\nint allowed(void) { return 0; }\n", encoding="utf-8")
+    (core / "allowed.c").write_text(
+        "// NOLINTNEXTLINE(foo)\nint allowed(void) { return 0; }\n", encoding="utf-8"
+    )
 
 
 def verify_self_test(errors: list[str]) -> int:
     reported = {Path(item.split(":", 2)[0]).name for item in errors}
     expected = {name for name, (_, flagged) in _SELF_TEST_CASES.items() if flagged}
     if reported != expected:
-        print(f"nolint-audit self-test failed: got {sorted(reported)} expected {sorted(expected)}", file=sys.stderr)
+        print(
+            f"nolint-audit self-test failed: got {sorted(reported)} expected {sorted(expected)}",
+            file=sys.stderr,
+        )
         return 1
     print("nolint-audit self-test: OK")
     return 0

@@ -59,7 +59,8 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
         {"wrapped_unspaced_bad.c"},
     ),
     "wrapped_one_line_bad.c": (
-        "static bool wrapped_one_line_bad(int x) { if (x > 0) { do_work(); return true; } return false; }\n",
+        "static bool wrapped_one_line_bad(int x) { if (x > 0) { do_work(); return true; } return "
+        "false; }\n",
         {"wrapped_one_line_bad.c"},
     ),
     "guard_ok.c": (
@@ -135,9 +136,7 @@ def condition_looks_inverted(cond: str) -> bool:
     stripped = cond.strip()
     if stripped.startswith("!"):
         return True
-    if "||" in stripped:
-        return True
-    return False
+    return "||" in stripped
 
 
 def find_block_open_for_close(lines: list[str], close_idx: int) -> int:
@@ -197,9 +196,7 @@ def is_dispatch_or_classification(lines: list[str], if_idx: int, close_idx: int)
 
 def _func_start_pattern(config: PolicyConfig) -> re.Pattern[str]:
     nodiscard = re.escape(f"{config.c_macro_prefix}_NODISCARD")
-    return re.compile(
-        rf"^(?:static\s+)?(?:inline\s+)?(?:{nodiscard}\s+)?bool\s+\w+\s*\("
-    )
+    return re.compile(rf"^(?:static\s+)?(?:inline\s+)?(?:{nodiscard}\s+)?bool\s+\w+\s*\(")
 
 
 def iter_bool_function_bodies(lines: list[str], config: PolicyConfig) -> list[tuple[int, int]]:
@@ -316,7 +313,8 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core]\n",
         encoding="utf-8",
     )

@@ -35,8 +35,10 @@ LINT_OK_DETAIL = (
 )
 
 GUARD_REGEXES = (
-    re.compile(r"\b(?:\w*len|\w*cap|\w*bytes|nbytes|rlen|count|size|total|need|end_offset|declared_total|"
-               r"response_len|max_storage_len|pos|nstd|hdr_skip|nad_idx)\s*(?:<=|>=|==|!=|[<>])\s*"),
+    re.compile(
+        r"\b(?:\w*len|\w*cap|\w*bytes|nbytes|rlen|count|size|total|need|end_offset|declared_total|"
+        r"response_len|max_storage_len|pos|nstd|hdr_skip|nad_idx)\s*(?:<=|>=|==|!=|[<>])\s*"
+    ),
     re.compile(r"\b\w+\s*(?:<=|>=|==|!=|[<>])\s*\d+[uU]?\b"),
     re.compile(r"for\s*\([^;]*;\s*[^;]*<\s*(?:len|n|cap|\w+_len|\w+_cap|sizeof\s*\()"),
     re.compile(r"while\s*\(\s*\w+\s*<\s*(?:len|cap|\w+_len|\w+_cap|sizeof\s*\()"),
@@ -64,16 +66,12 @@ DATA_PTR = re.compile(r"(?:&(\w+)\[(\d+[uU]?)\]|(\w+)\s*\+\s*(\d+[uU]?))")
 WRITE_SUBSCRIPT = re.compile(r"\b(\w+)\[([^\]]+)\]\s*(?:\+\+|--)?\s*=(?!=)")
 LITERAL_INDEX = re.compile(r"^(\d+)[uU]?$")
 LOOP_INDEX = re.compile(r"for\s*\(\s*(?:uint\d+_t\s+)?(\w+)\s*=")
-BOUNDED_LOOP = re.compile(
-    r"for\s*\(\s*(?:uint\d+_t\s+)?(\w+)\s*=\s*[^;]*;\s*\1\s*<\s*([^;)]+)"
-)
+BOUNDED_LOOP = re.compile(r"for\s*\(\s*(?:uint\d+_t\s+)?(\w+)\s*=\s*[^;]*;\s*\1\s*<\s*([^;)]+)")
 PARAM_ARRAY_BOUND_RE = re.compile(r"\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]\s*[,);]")
 _SAFE_HELPER_PARTS = ("copy_", "try_", "span_ok", "parse_", "bounded_")
 
 
-def _safe_helper_call_in_body(
-    body: str, config: PolicyConfig, index_expr: str
-) -> bool:
+def _safe_helper_call_in_body(body: str, config: PolicyConfig, index_expr: str) -> bool:
     prefix = config.c_api_prefix
     part_alt = "|".join(re.escape(part) for part in _SAFE_HELPER_PARTS)
     expr = re.sub(r"\s+", "", index_expr).rstrip("+")
@@ -101,9 +99,7 @@ def function_has_guard_for_index(
         return False
     # Numeric index: tolerate integer literal suffixes in the guard text
     # (`count <= 1` and `count <= 1u` both credit index expr `1`).
-    expr_rx = (
-        rf"{re.escape(expr)}[uUlL]*" if re.fullmatch(r"\d+", expr) else re.escape(expr)
-    )
+    expr_rx = rf"{re.escape(expr)}[uUlL]*" if re.fullmatch(r"\d+", expr) else re.escape(expr)
     bound = r"(?:\w*(?:len|cap|size|count|bytes)\w*|\w+\.size\s*\(\s*\))"
     return bool(
         re.search(rf"\b{expr_rx}\s*(?:<|<=|>=|>)\s*{bound}", body)
@@ -181,9 +177,7 @@ def function_has_output_cap_for_literal(lines: list[str], line_idx: int, lit: in
     body = function_body(lines, line_idx)
     need = lit + 1
     size_name = r"(?:n|rlen|count|bytes|\w*(?:cap|len|size))"
-    for match in re.finditer(
-        rf"\b{size_name}\s*(<=|>=|<|>)\s*(\d+)[uU]?\b", body
-    ):
+    for match in re.finditer(rf"\b{size_name}\s*(<=|>=|<|>)\s*(\d+)[uU]?\b", body):
         operator, raw_value = match.groups()
         value = int(raw_value)
         if operator in {"<", ">="} and value >= need:
@@ -201,9 +195,8 @@ def function_has_loop_bound_for_index(lines: list[str], line_idx: int, index_exp
             if match.group(1) == idx:
                 return True
     for match in LOOP_INDEX.finditer(body):
-        if match.group(1) == idx:
-            if re.search(rf"for\s*\([^;]*;\s*{re.escape(idx)}\s*<\s*", body):
-                return True
+        if match.group(1) == idx and re.search(rf"for\s*\([^;]*;\s*{re.escape(idx)}\s*<\s*", body):
+            return True
     return False
 
 
@@ -239,9 +232,7 @@ def subscript_allowed(
         return True
     if function_has_length_guard_for_expr(lines, line_idx, index_expr):
         return True
-    if function_has_guard_for_index(lines, line_idx, index_expr, config):
-        return True
-    return False
+    return bool(function_has_guard_for_index(lines, line_idx, index_expr, config))
 
 
 def scan_subscripts(path: Path, lines: list[str], config: PolicyConfig) -> list[str]:
@@ -313,142 +304,140 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 
 
 _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
-        "safe_copy_ok.c": (
-            '#include "sample/mem_util.h"\n'
-            "bool g(uint8_t *d, const uint8_t *s) { return sample_copy_bytes(d, 8, 0, s, 4); }\n",
-            set(),
-        ),
-        "literal_header_ok.c": (
-            "bool h(const uint8_t *payload, uint16_t n) {\n"
-            "  if (n < 5u) return false;\n"
-            "  return payload[0] == 0x00u && payload[4] == 3u;\n"
-            "}\n",
-            set(),
-        ),
-        "deep_literal_bad.c": (
-            "bool h(const uint8_t *resp, int n) {\n"
-            "  (void)n;\n"
-            "  return resp[14] == 0;\n"
-            "}\n",
-            {"deep_literal_bad.c"},
-        ),
-        "inline_deep_literal_bad.c": (
-            "bool h(const uint8_t *payload) { return payload[5] == 0; }\n",
-            {"inline_deep_literal_bad.c"},
-        ),
-        "multiline_sig_deep_literal_bad.c": (
-            "bool h(const uint8_t *payload,\n"
-            "       uint16_t n) {\n"
-            "  (void)n;\n"
-            "  return payload[7] == 0;\n"
-            "}\n",
-            {"multiline_sig_deep_literal_bad.c"},
-        ),
-        "multiline_sig_guarded_ok.c": (
-            "bool h(const uint8_t *payload,\n"
-            "       uint16_t n) {\n"
-            "  if (n < 8u) return false;\n"
-            "  return payload[7] == 0;\n"
-            "}\n",
-            set(),
-        ),
-        "suffixed_literal_guard_ok.c": (
-            "int h(char **argv, int argc) {\n"
-            "  const size_t arg_count = (size_t)argc;\n"
-            "  if (arg_count <= 1u) return -1;\n"
-            "  return argv[1][0];\n"
-            "}\n",
-            set(),
-        ),
-        "local_array_decl_ok.c": (
-            "void h(void) { uint8_t scratch[5]; scratch[4] = 0; (void)scratch; }\n",
-            set(),
-        ),
-        "switch_size_guard_ok.cpp": (
-            "void f(std::vector<uint8_t> resp) {\n"
-            "  size_t pos = 0;\n"
-            "  if (pos + 2u >= resp.size()) { return; }\n"
-            "  switch (resp[pos]) {\n"
-            "  default: break;\n"
-            "  }\n"
-            "}\n",
-            set(),
-        ),
-        "switch_noguard_bad.cpp": (
-            "void f(const uint8_t *resp, int n) {\n"
-            "  (void)n;\n"
-            "  switch (resp[7]) {\n"
-            "  default: break;\n"
-            "  }\n"
-            "}\n",
-            {"switch_noguard_bad.cpp"},
-        ),
-        "guarded_var_ok.c": (
-            "bool h(const uint8_t *payload, uint16_t payload_len, uint8_t lc) {\n"
-            "  if (!sample_span_ok(5u, lc, payload_len)) return false;\n"
-            "  return payload[5] == 0;\n"
-            "}\n",
-            set(),
-        ),
-        "loop_bound_ok.c": (
-            "uint16_t crc(const uint8_t *buf, uint16_t len) {\n"
-            "  uint16_t c = 0;\n"
-            "  for (uint16_t i = 0u; i < len; i++) { c ^= buf[i]; }\n"
-            "  return c;\n"
-            "}\n",
-            set(),
-        ),
-        "len_minus_ok.c": (
-            "bool ok(const uint8_t *frame, uint16_t len) {\n"
-            "  if (len < 3u) return false;\n"
-            "  return frame[len - 2u] == 0;\n"
-            "}\n",
-            set(),
-        ),
-        "cap_literal_ok.c": (
-            "bool fill(uint8_t *out, unsigned cap) {\n"
-            "  if (cap < 5u) return false;\n"
-            "  out[4] = 0;\n"
-            "  return true;\n"
-            "}\n",
-            set(),
-        ),
-        "data_ptr_bad.c": (
-            "bool w(const uint8_t *payload, uint16_t payload_len) {\n"
-            "  (void)payload_len;\n"
-            "  return write_slot(4, &payload[5]);\n"
-            "}\n",
-            {"data_ptr_bad.c"},
-        ),
-        "pos_write_bad.c": (
-            "bool w(uint8_t *buf, size_t cap) {\n"
-            "  size_t pos = 0;\n"
-            "  buf[pos++] = 1;\n"
-            "  return true;\n"
-            "}\n",
-            {"pos_write_bad.c"},
-        ),
-        "unrelated_guard_bad.c": (
-            "bool h(const uint8_t *payload, uint16_t payload_len, unsigned retries) {\n"
-            "  if (retries > 3u) return false;\n"
-            "  return payload[5] == 0;\n"
-            "}\n",
-            {"unrelated_guard_bad.c"},
-        ),
-        "non_pointer_ok.c": (
-            "struct S { uint8_t data[8]; };\n"
-            "uint8_t f(S *s) { return s->data[5]; }\n",
-            set(),
-        ),
+    "safe_copy_ok.c": (
+        '#include "sample/mem_util.h"\n'
+        "bool g(uint8_t *d, const uint8_t *s) { return sample_copy_bytes(d, 8, 0, s, 4); }\n",
+        set(),
+    ),
+    "literal_header_ok.c": (
+        "bool h(const uint8_t *payload, uint16_t n) {\n"
+        "  if (n < 5u) return false;\n"
+        "  return payload[0] == 0x00u && payload[4] == 3u;\n"
+        "}\n",
+        set(),
+    ),
+    "deep_literal_bad.c": (
+        "bool h(const uint8_t *resp, int n) {\n  (void)n;\n  return resp[14] == 0;\n}\n",
+        {"deep_literal_bad.c"},
+    ),
+    "inline_deep_literal_bad.c": (
+        "bool h(const uint8_t *payload) { return payload[5] == 0; }\n",
+        {"inline_deep_literal_bad.c"},
+    ),
+    "multiline_sig_deep_literal_bad.c": (
+        "bool h(const uint8_t *payload,\n"
+        "       uint16_t n) {\n"
+        "  (void)n;\n"
+        "  return payload[7] == 0;\n"
+        "}\n",
+        {"multiline_sig_deep_literal_bad.c"},
+    ),
+    "multiline_sig_guarded_ok.c": (
+        "bool h(const uint8_t *payload,\n"
+        "       uint16_t n) {\n"
+        "  if (n < 8u) return false;\n"
+        "  return payload[7] == 0;\n"
+        "}\n",
+        set(),
+    ),
+    "suffixed_literal_guard_ok.c": (
+        "int h(char **argv, int argc) {\n"
+        "  const size_t arg_count = (size_t)argc;\n"
+        "  if (arg_count <= 1u) return -1;\n"
+        "  return argv[1][0];\n"
+        "}\n",
+        set(),
+    ),
+    "local_array_decl_ok.c": (
+        "void h(void) { uint8_t scratch[5]; scratch[4] = 0; (void)scratch; }\n",
+        set(),
+    ),
+    "switch_size_guard_ok.cpp": (
+        "void f(std::vector<uint8_t> resp) {\n"
+        "  size_t pos = 0;\n"
+        "  if (pos + 2u >= resp.size()) { return; }\n"
+        "  switch (resp[pos]) {\n"
+        "  default: break;\n"
+        "  }\n"
+        "}\n",
+        set(),
+    ),
+    "switch_noguard_bad.cpp": (
+        "void f(const uint8_t *resp, int n) {\n"
+        "  (void)n;\n"
+        "  switch (resp[7]) {\n"
+        "  default: break;\n"
+        "  }\n"
+        "}\n",
+        {"switch_noguard_bad.cpp"},
+    ),
+    "guarded_var_ok.c": (
+        "bool h(const uint8_t *payload, uint16_t payload_len, uint8_t lc) {\n"
+        "  if (!sample_span_ok(5u, lc, payload_len)) return false;\n"
+        "  return payload[5] == 0;\n"
+        "}\n",
+        set(),
+    ),
+    "loop_bound_ok.c": (
+        "uint16_t crc(const uint8_t *buf, uint16_t len) {\n"
+        "  uint16_t c = 0;\n"
+        "  for (uint16_t i = 0u; i < len; i++) { c ^= buf[i]; }\n"
+        "  return c;\n"
+        "}\n",
+        set(),
+    ),
+    "len_minus_ok.c": (
+        "bool ok(const uint8_t *frame, uint16_t len) {\n"
+        "  if (len < 3u) return false;\n"
+        "  return frame[len - 2u] == 0;\n"
+        "}\n",
+        set(),
+    ),
+    "cap_literal_ok.c": (
+        "bool fill(uint8_t *out, unsigned cap) {\n"
+        "  if (cap < 5u) return false;\n"
+        "  out[4] = 0;\n"
+        "  return true;\n"
+        "}\n",
+        set(),
+    ),
+    "data_ptr_bad.c": (
+        "bool w(const uint8_t *payload, uint16_t payload_len) {\n"
+        "  (void)payload_len;\n"
+        "  return write_slot(4, &payload[5]);\n"
+        "}\n",
+        {"data_ptr_bad.c"},
+    ),
+    "pos_write_bad.c": (
+        "bool w(uint8_t *buf, size_t cap) {\n"
+        "  size_t pos = 0;\n"
+        "  buf[pos++] = 1;\n"
+        "  return true;\n"
+        "}\n",
+        {"pos_write_bad.c"},
+    ),
+    "unrelated_guard_bad.c": (
+        "bool h(const uint8_t *payload, uint16_t payload_len, unsigned retries) {\n"
+        "  if (retries > 3u) return false;\n"
+        "  return payload[5] == 0;\n"
+        "}\n",
+        {"unrelated_guard_bad.c"},
+    ),
+    "non_pointer_ok.c": (
+        "struct S { uint8_t data[8]; };\nuint8_t f(S *s) { return s->data[5]; }\n",
+        set(),
+    ),
 }
 
 
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core, port, include, userspace, tests]\n"
-        "policy:\n  unsafe_api:\n    header: sample_null.h\n    include_headers: [attrs.h, mem_util.h]\n"
+        "policy:\n  unsafe_api:\n    header: sample_null.h\n"
+        "    include_headers: [attrs.h, mem_util.h]\n"
         "  constants_headers: [limits.h, board_config.h, config.h]\n",
         encoding="utf-8",
     )
@@ -480,4 +469,3 @@ def verify_self_test(errors: list[str]) -> int:
         return 1
     print("safe-indexing self-test: OK")
     return 0
-

@@ -52,12 +52,10 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
     "good.c": ("void f(void){}\n", set()),
     "comment_ok.c": ("/* strcpy(d,s) */ void f(void){}\n", set()),
     "string_slash_star_bad.c": (
-        'const char *o = "/*";\n'
-        "void f(void){ system(a); }\n"
-        'const char *c = "*/";\n',
+        'const char *o = "/*";\nvoid f(void){ system(a); }\nconst char *c = "*/";\n',
         {"string_slash_star_bad.c"},
     ),
-    "good_io.cpp": (f"void f(){{ {_PREFIX}::{_PREFIX}_stderr_line(\"x\"); }}\n", set()),
+    "good_io.cpp": (f'void f(){{ {_PREFIX}::{_PREFIX}_stderr_line("x"); }}\n', set()),
     "good_format.h": (
         f"int {_PREFIX}_snprintf(char *buf, size_t cap, const char *fmt, ...);\n",
         set(),
@@ -70,10 +68,7 @@ _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
         set(),
     ),
     f"{_PREFIX}_io.c": (
-        f"void {_PREFIX}_emit_line(const char *s) {{\n"
-        "  fputs(s, stdout);\n"
-        "  fflush(stdout);\n"
-        "}\n",
+        f"void {_PREFIX}_emit_line(const char *s) {{\n  fputs(s, stdout);\n  fflush(stdout);\n}}\n",
         set(),
     ),
     "bad_wrapper_heap.c": (
@@ -162,9 +157,7 @@ def scan_raw_terminal_output(path: Path, blanked: str, text: str, prefix: str) -
             if is_preprocessor_at(blanked, match.start()):
                 continue
             line_no = line_number_at(text, match.start())
-            issues.append(
-                f"{path}:{line_no}: output must use {prefix}_* wrappers ({detail})"
-            )
+            issues.append(f"{path}:{line_no}: output must use {prefix}_* wrappers ({detail})")
     return issues
 
 
@@ -180,15 +173,14 @@ def scan_file(path: Path, prefix: str, repo_root: Path) -> list[str]:
 
 def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
     prefix = config.c_api_prefix
-    return sorted(
-        {issue for path in paths for issue in scan_file(path, prefix, config.repo_root)}
-    )
+    return sorted({issue for path in paths for issue in scan_file(path, prefix, config.repo_root)})
 
 
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core]\n"
         "policy:\n  unsafe_api:\n    wrapper_files:\n"
         f"      - core/app/{_PREFIX}_format.c\n"

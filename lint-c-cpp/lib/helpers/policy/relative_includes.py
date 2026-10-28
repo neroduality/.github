@@ -50,7 +50,9 @@ _SELF_TEST_LINES = {"string_slash_star_bad.c": 2, "multiline_comment_bad.c": 5}
 
 
 def scan_file(path: Path) -> list[str]:
-    code_lines = strip_comments_only(path.read_text(encoding="utf-8", errors="replace")).splitlines()
+    code_lines = strip_comments_only(
+        path.read_text(encoding="utf-8", errors="replace")
+    ).splitlines()
     issues: list[str] = []
     for line_no, code_line in enumerate(code_lines, 1):
         match = INCLUDE_LITERAL.match(code_line)
@@ -70,7 +72,8 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core]\n",
         encoding="utf-8",
     )
@@ -85,7 +88,10 @@ def verify_self_test(errors: list[str]) -> int:
     reported_lines = {Path(err.split(":", 2)[0]).name: int(err.split(":", 2)[1]) for err in errors}
     expected = {name for name, (_, names) in _SELF_TEST_CASES.items() if names}
     if reported != expected:
-        print(f"relative-includes self-test failed: got {reported}, expected {expected}", file=sys.stderr)
+        print(
+            f"relative-includes self-test failed: got {reported}, expected {expected}",
+            file=sys.stderr,
+        )
         return 1
     for name, line in _SELF_TEST_LINES.items():
         if reported_lines.get(name) != line:

@@ -30,15 +30,24 @@ LINT_TITLE = "duplicate includes"
 LINT_FIX_HINT = "Remove mixed-angle/quote or macro #include dupes; exact repeats are clang-tidy."
 
 INCLUDE_LITERAL = re.compile(r'^\s*#\s*include\s+(?:"([^"]+)"|<([^>]+)>)')
-INCLUDE_MACRO = re.compile(r'^\s*#\s*include\s+([A-Za-z_][A-Za-z0-9_]*)')
+INCLUDE_MACRO = re.compile(r"^\s*#\s*include\s+([A-Za-z_][A-Za-z0-9_]*)")
 PRAGMA_ONCE = re.compile(r"^\s*#\s*pragma\s+once\b")
 
 _SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {
     "unique_ok.c": ('#include "a.h"\n#include "b.h"\n', set()),
     "pragma_once_ok.h": ('// license comment\n\n#pragma once\n#include "a.h"\n', set()),
-    "pragma_once_after_include_bad.h": ('#include "a.h"\n#pragma once\n', {"pragma_once_after_include_bad.h"}),
-    "pragma_once_missing_bad.hpp": ("// license comment\nint f(void);\n", {"pragma_once_missing_bad.hpp"}),
-    "pragma_once_in_block_comment_bad.h": ("/* #pragma once */\nint f(void);\n", {"pragma_once_in_block_comment_bad.h"}),
+    "pragma_once_after_include_bad.h": (
+        '#include "a.h"\n#pragma once\n',
+        {"pragma_once_after_include_bad.h"},
+    ),
+    "pragma_once_missing_bad.hpp": (
+        "// license comment\nint f(void);\n",
+        {"pragma_once_missing_bad.hpp"},
+    ),
+    "pragma_once_in_block_comment_bad.h": (
+        "/* #pragma once */\nint f(void);\n",
+        {"pragma_once_in_block_comment_bad.h"},
+    ),
     "dup_literal.c": ('#include "foo.h"\n#include "foo.h"\n', set()),
     "dup_mixed.c": ('#include <foo.h>\n#include "foo.h"\n', {"dup_mixed.c"}),
     "dup_macro.c": ("#include CONFIG_HEADER\n#include CONFIG_HEADER\n", set()),
@@ -126,7 +135,8 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
 def prepare_self_test_repo(root: Path) -> None:
     (root / ".github").mkdir(parents=True)
     (root / ".github" / "lint-c-cpp.yaml").write_text(
-        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n  public_headers_dir: include/sample\n"
+        "scan:\n  c_api_prefix: sample\n  c_macro_prefix: SAMPLE\n"
+        "  public_headers_dir: include/sample\n"
         "  source_roots: [core]\n",
         encoding="utf-8",
     )

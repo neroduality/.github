@@ -20,6 +20,7 @@
 Every allowed key must be present (use ``null`` when unused). Unknown keys fail.
 Content rules still apply to non-null values (e.g. ``scan``, ``policy``, ``compile_db``).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,7 +31,7 @@ from typing import Any
 _LINT_LIB = Path(__file__).resolve().parents[2]
 if str(_LINT_LIB) not in sys.path:
     sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath
+from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
 
 _bootstrap_lint_pythonpath()
 
@@ -39,7 +40,7 @@ try:
 except ImportError:
     yaml = None
 
-from consumer_manifest import KNOWN_LINT_JOBS, load
+from consumer_manifest import KNOWN_LINT_JOBS, load  # noqa: E402
 
 ALLOWED_TOP_LEVEL_KEYS = frozenset(
     {
@@ -78,12 +79,8 @@ ALLOWED_SCAN_KEYS = frozenset(
 )
 
 
-ALLOWED_COMPILE_DB_KEYS = frozenset(
-    {"firmware", "userspace"}
-)
-ALLOWED_COMPILE_DB_FIRMWARE_ENTRY_KEYS = frozenset(
-    {"compile_commands_json", "commands", "source"}
-)
+ALLOWED_COMPILE_DB_KEYS = frozenset({"firmware", "userspace"})
+ALLOWED_COMPILE_DB_FIRMWARE_ENTRY_KEYS = frozenset({"compile_commands_json", "commands", "source"})
 ALLOWED_COMPILE_DB_USERSPACE_ENTRY_KEYS = frozenset(
     {"compile_commands_json", "source", "cmake_args"}
 )
@@ -121,10 +118,7 @@ def _unknown_keys(mapping: dict, allowed: frozenset[str], label: str) -> list[st
     unknown = sorted(key for key in mapping if key not in allowed)
     if not unknown:
         return []
-    return [
-        f"unknown {label}: {', '.join(unknown)} "
-        f"(allowed: {', '.join(sorted(allowed))})"
-    ]
+    return [f"unknown {label}: {', '.join(unknown)} (allowed: {', '.join(sorted(allowed))})"]
 
 
 def _missing_required_keys(
@@ -158,7 +152,6 @@ def _require_mapping_keys(
     issues = _unknown_keys(value, allowed, f"{label} fields")
     issues.extend(_missing_required_keys(value, allowed, label))
     return issues
-
 
 
 def validate_allowed_policy_keys(policy: dict, manifest_path: Path) -> list[str]:
@@ -203,12 +196,14 @@ def validate_scan_block(scan: dict, manifest_path: Path) -> list[str]:
             resolved = (repo_root / rel).resolve()
             if rel.is_absolute() or not resolved.is_relative_to(repo_root):
                 issues.append(
-                    f"{manifest_path}: scan.source_roots entry {item!r} must stay inside the repository"
+                    f"{manifest_path}: scan.source_roots entry {item!r} must stay inside the "
+                    "repository"
                 )
                 continue
             if not resolved.is_dir():
                 issues.append(
-                    f"{manifest_path}: scan.source_roots entry {item!r} is not an existing directory"
+                    f"{manifest_path}: scan.source_roots entry {item!r} is not an existing "
+                    "directory"
                 )
                 continue
             normalized.append((resolved.relative_to(repo_root).as_posix(), resolved))
@@ -278,9 +273,7 @@ def validate_enabled_lint_jobs(data: dict, manifest_path: Path) -> list[str]:
     seen: set[str] = set()
     for index, item in enumerate(raw):
         if not isinstance(item, str) or not item.strip():
-            issues.append(
-                f"{manifest_path}: enabled_lint_jobs[{index}] must be a non-empty string"
-            )
+            issues.append(f"{manifest_path}: enabled_lint_jobs[{index}] must be a non-empty string")
             continue
         job = item.strip()
         if job not in KNOWN_LINT_JOBS:
@@ -297,14 +290,11 @@ def validate_enabled_lint_jobs(data: dict, manifest_path: Path) -> list[str]:
     # serve projects of any size. Jobs still gate their own prerequisites below.
     for consumer in ("clang_tidy", "cppcheck", "openssf", "firmware_compile_db"):
         if consumer in seen and "compile_db" not in seen:
-            issues.append(
-                f"{manifest_path}: enabled_lint_jobs: {consumer} requires compile_db"
-            )
+            issues.append(f"{manifest_path}: enabled_lint_jobs: {consumer} requires compile_db")
     compile_db_block = data.get("compile_db")
     firmware_entries = (
         compile_db_block.get("firmware")
-        if isinstance(compile_db_block, dict)
-        and isinstance(compile_db_block.get("firmware"), list)
+        if isinstance(compile_db_block, dict) and isinstance(compile_db_block.get("firmware"), list)
         else []
     )
     for fw_job in ("firmware_compile_db", "firmware_build"):
@@ -396,12 +386,16 @@ def validate_resource_lifetime_regexes(
                 ):
                     issues.append(
                         f"{manifest_path}: policy.resource_lifetime.pairs[{index}]."
-                        f"canonical_files[{file_index}] must name an existing file inside the repository"
+                        f"canonical_files[{file_index}] must name an existing file inside the "
+                        "repository"
                     )
         for field in ("acquire", "release"):
             raw = pair.get(field, [])
             if not isinstance(raw, list):
-                issues.append(f"{manifest_path}: policy.resource_lifetime.pairs[{index}].{field} must be a list")
+                issues.append(
+                    f"{manifest_path}: policy.resource_lifetime.pairs[{index}].{field} must be a "
+                    "list"
+                )
                 continue
             for pattern in raw:
                 if not isinstance(pattern, str):
@@ -410,7 +404,8 @@ def validate_resource_lifetime_regexes(
                     re.compile(pattern)
                 except re.error as exc:
                     issues.append(
-                        f"{manifest_path}: policy.resource_lifetime {label} {field} pattern {pattern!r}: {exc}"
+                        f"{manifest_path}: policy.resource_lifetime {label} {field} pattern "
+                        f"{pattern!r}: {exc}"
                     )
     return issues
 
@@ -487,8 +482,7 @@ def validate_firmware_build(data: dict, manifest_path: Path) -> list[str]:
         isinstance(item, str) and item.strip() for item in commands
     ):
         issues.append(
-            f"{manifest_path}: firmware_build.commands must be a list of non-empty strings "
-            "or null"
+            f"{manifest_path}: firmware_build.commands must be a list of non-empty strings or null"
         )
     elif not commands:
         issues.append(
@@ -534,7 +528,8 @@ def validate_optional_top_level_sections(data: dict, manifest_path: Path) -> lis
                 or not resolved.is_file()
             ):
                 issues.append(
-                    f"{manifest_path}: toolchain.script must name an existing file inside the repository"
+                    f"{manifest_path}: toolchain.script must name an existing file inside the "
+                    "repository"
                 )
 
     spec_traceability = data.get("spec_traceability")
@@ -583,7 +578,9 @@ def validate_policy(data: dict, manifest_path: Path) -> list[str]:
     if not isinstance(raw_shared, list) or not raw_shared:
         issues.append(f"{manifest_path}: policy.constants_headers must be a non-empty list")
     elif not all(isinstance(item, str) and item.strip() for item in raw_shared):
-        issues.append(f"{manifest_path}: policy.constants_headers entries must be non-empty strings")
+        issues.append(
+            f"{manifest_path}: policy.constants_headers entries must be non-empty strings"
+        )
 
     raw_nolint = policy.get("nolint_allowed")
     if raw_nolint is not None:
@@ -592,19 +589,20 @@ def validate_policy(data: dict, manifest_path: Path) -> list[str]:
                 f"{manifest_path}: policy.nolint_allowed must be a non-empty list or null"
             )
         elif not all(isinstance(item, str) and item.strip() for item in raw_nolint):
-            issues.append(f"{manifest_path}: policy.nolint_allowed entries must be non-empty strings")
+            issues.append(
+                f"{manifest_path}: policy.nolint_allowed entries must be non-empty strings"
+            )
 
     shared_c_cxx = policy.get("shared_c_cxx_source_roots")
-    if shared_c_cxx is not None:
-        if (
-            not isinstance(shared_c_cxx, list)
-            or not shared_c_cxx
-            or not all(isinstance(item, str) and item.strip() for item in shared_c_cxx)
-        ):
-            issues.append(
-                f"{manifest_path}: policy.shared_c_cxx_source_roots must be a "
-                "non-empty list of non-empty strings or null"
-            )
+    if shared_c_cxx is not None and (
+        not isinstance(shared_c_cxx, list)
+        or not shared_c_cxx
+        or not all(isinstance(item, str) and item.strip() for item in shared_c_cxx)
+    ):
+        issues.append(
+            f"{manifest_path}: policy.shared_c_cxx_source_roots must be a "
+            "non-empty list of non-empty strings or null"
+        )
 
     resource_lifetime = policy.get("resource_lifetime")
     issues.extend(
@@ -644,22 +642,26 @@ def validate_unsafe_api(data: dict, manifest_path: Path) -> list[str]:
     issues: list[str] = []
     unknown = sorted(key for key in block if key not in ALLOWED_UNSAFE_API_KEYS)
     if unknown:
-        issues.append(
-            f"{manifest_path}: unknown policy.unsafe_api fields: {', '.join(unknown)}"
-        )
+        issues.append(f"{manifest_path}: unknown policy.unsafe_api fields: {', '.join(unknown)}")
     header = block.get("header")
     if not isinstance(header, str) or not header.strip():
         issues.append(f"{manifest_path}: policy.unsafe_api.header must be a non-empty string")
     include_headers = block.get("include_headers")
     if not isinstance(include_headers, list) or not include_headers:
-        issues.append(f"{manifest_path}: policy.unsafe_api.include_headers must be a non-empty list")
+        issues.append(
+            f"{manifest_path}: policy.unsafe_api.include_headers must be a non-empty list"
+        )
     elif not all(isinstance(item, str) and item.strip() for item in include_headers):
-        issues.append(f"{manifest_path}: policy.unsafe_api.include_headers entries must be non-empty strings")
+        issues.append(
+            f"{manifest_path}: policy.unsafe_api.include_headers entries must be non-empty strings"
+        )
     raw = block.get("wrapper_files")
     if not isinstance(raw, list) or not raw:
         issues.append(f"{manifest_path}: policy.unsafe_api.wrapper_files must be a non-empty list")
     elif not all(isinstance(item, str) and item.strip() for item in raw):
-        issues.append(f"{manifest_path}: policy.unsafe_api.wrapper_files entries must be non-empty strings")
+        issues.append(
+            f"{manifest_path}: policy.unsafe_api.wrapper_files entries must be non-empty strings"
+        )
     return issues
 
 
@@ -700,9 +702,7 @@ def _validate_compile_db_firmware_list(firmware: Any, manifest_path: Path) -> li
         elif not isinstance(commands, list) or not commands:
             issues.append(f"{manifest_path}: {label}.commands must be a non-empty list")
         elif not all(isinstance(item, str) and item.strip() for item in commands):
-            issues.append(
-                f"{manifest_path}: {label}.commands entries must be non-empty strings"
-            )
+            issues.append(f"{manifest_path}: {label}.commands entries must be non-empty strings")
         source = entry.get("source")
         if source is None:
             issues.append(f"{manifest_path}: {label}.source is required")
@@ -827,9 +827,7 @@ def main() -> int:
     issues: list[str] = []
     license_header = data.get("license_header")
     if not isinstance(license_header, str) or not license_header.strip():
-        issues.append(
-            f"{manifest}: license_header must be a non-empty string (block scalar)"
-        )
+        issues.append(f"{manifest}: license_header must be a non-empty string (block scalar)")
     issues.extend(validate_allowed_top_level_keys(data, manifest))
     issues.extend(validate_enabled_lint_jobs(data, manifest))
     scan = data.get("scan")
