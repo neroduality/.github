@@ -31,14 +31,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-_LINT_LIB = Path(__file__).resolve().parents[2]
-_DEFAULT_LINT_KIT = _LINT_LIB.parent
-if str(_LINT_LIB) not in sys.path:
-    sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
-
-_bootstrap_lint_pythonpath()
-from compile_db_util import (  # noqa: E402
+from compile_db_util import (
     MergedCompileDatabase,
     assert_compile_db_entries_in_scan_scope,
     clang_target_for_command,
@@ -56,7 +49,7 @@ from compile_db_util import (  # noqa: E402
     load_richest_compile_entries,
     verify_required_compile_commands,
 )
-from consumer_manifest import (  # noqa: E402
+from consumer_manifest import (
     clang_tidy_header_filter_regex,
     clang_tidy_header_filter_regex_for_overlay,
     clang_tidy_merge_build_dir,
@@ -72,8 +65,8 @@ from consumer_manifest import (  # noqa: E402
     resolve_scan_paths,
     verify_compile_db_cmake_coverage,
 )
-from repo_paths import source_key  # noqa: E402
-from scan_policy import (  # noqa: E402
+from repo_paths import source_key
+from scan_policy import (
     JOB_SOURCE,
     JOB_UNSAFE_API,
     SOURCE_SUFFIXES,
@@ -82,6 +75,8 @@ from scan_policy import (  # noqa: E402
     read_paths_file,
 )
 
+_LINT_LIB = Path(__file__).resolve().parents[2]
+_DEFAULT_LINT_KIT = _LINT_LIB.parent
 _CONTAINER_PATH_PREFIXES = ("/src/", "/workspace/")
 _FIRMWARE_COMPILE_DB_LABEL = "firmware compile"
 _CPPCHECK_COMPILE_COMMANDS = "cppcheck.compile_commands.json"
@@ -971,9 +966,6 @@ def configure_compile_db(
             return 1
 
     resolved_kit = (lint_kit or _DEFAULT_LINT_KIT).resolve()
-    _policy_helpers = _LINT_LIB / "helpers" / "policy"
-    if str(_policy_helpers) not in sys.path:
-        sys.path.insert(0, str(_policy_helpers))
     from hardening_verify import compile_db_openssf_audit_scope, verify_compile_commands_openssf
 
     header_role_issues = cxx_in_c_compatible_header_violations(source_paths, repo_root)

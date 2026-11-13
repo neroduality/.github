@@ -65,57 +65,46 @@ _FORMAT_C_SUFFIXES = SOURCE_SUFFIXES
 _SCAN_JOB_PROFILES: dict[str, dict[str, object]] = {
     JOB_SOURCE: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": SOURCE_SUFFIXES,
     },
     JOB_UNSAFE_API: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": SOURCE_SUFFIXES,
     },
     JOB_NOLINT: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": True,
-        "suffixes": SOURCE_SUFFIXES,
+        "suffixes": None,
     },
     JOB_MARKDOWN: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": frozenset({".md"}),
     },
     JOB_FORMAT_C: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": _FORMAT_C_SUFFIXES,
     },
     JOB_YAML: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": frozenset({".yaml", ".yml"}),
     },
     JOB_SHELL: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": frozenset({".sh"}),
     },
     JOB_ALL_FILES: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": None,
     },
     JOB_CODESPELL: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": _CODESPELL_SUFFIXES,
     },
     JOB_LICENSE: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": None,
     },
     JOB_PYTHON: {
         "exclude_unsafe_wrappers": False,
-        "exclude_nolint_allowed": False,
         "suffixes": frozenset({".py"}),
     },
 }
@@ -130,6 +119,7 @@ _REPO_WIDE_SCAN_JOBS = frozenset(
         JOB_LICENSE,
         JOB_ALL_FILES,
         JOB_PYTHON,
+        JOB_NOLINT,
     }
 )
 
@@ -247,7 +237,6 @@ def bootstrap_policy_yaml(prefix: str) -> str:
     return (
         "policy:\n"
         "  constants_headers: [limits.h, board_config.h, config.h]\n"
-        "  nolint_allowed: null\n"
         "  overrides:\n"
         "    clang-format: {add: null, remove: null, by_compile_db: null}\n"
         "    clang-tidy-c: {add: null, remove: null, by_compile_db: null}\n"
@@ -499,25 +488,6 @@ def path_is_unsafe_wrapper(path: Path, repo_root: Path) -> bool:
     return rel in unsafe_wrapper_rel_paths(repo_root)
 
 
-def nolint_allowed_rel_paths(repo_root: Path) -> frozenset[str]:
-    """Repo-relative paths where Google/clang-tidy NOLINT suppressions are permitted."""
-    raw = _policy(repo_root).get("nolint_allowed")
-    if not isinstance(raw, list) or not raw:
-        return frozenset()
-    return frozenset(
-        _normalize_repo_rel_path(item) for item in raw if isinstance(item, str) and item.strip()
-    )
-
-
-def path_is_nolint_allowed(path: Path, repo_root: Path) -> bool:
-    repo_root = repo_root.resolve()
-    try:
-        rel = path.resolve().relative_to(repo_root).as_posix()
-    except ValueError:
-        return False
-    return rel in nolint_allowed_rel_paths(repo_root)
-
-
 def resource_lifetime_pairs(repo_root: Path) -> tuple[dict[str, Any], ...]:
     """Acquire/release pairs from ``policy.resource_lifetime.pairs`` only (no auto-discovery)."""
     block = _policy(repo_root).get("resource_lifetime", {})
@@ -760,7 +730,7 @@ def iter_job_paths(
     *,
     suffixes: frozenset[str] | None = None,
 ) -> list[Path]:
-    """Central file list for a lint job; applies wrapper_files and nolint_allowed exclusions."""
+    """Central file list for a lint job; applies wrapper_files exclusions."""
     repo_root = repo_root.resolve()
     if job == JOB_CMAKE:
         return iter_cmake_lists_under_scan_scope(repo_root)
@@ -776,12 +746,6 @@ def iter_job_paths(
         if wrappers:
             paths = [
                 path for path in paths if path.relative_to(repo_root).as_posix() not in wrappers
-            ]
-    if profile.get("exclude_nolint_allowed"):
-        allowed = nolint_allowed_rel_paths(repo_root)
-        if allowed:
-            paths = [
-                path for path in paths if path.relative_to(repo_root).as_posix() not in allowed
             ]
     if job == JOB_LICENSE:
         paths = [path for path in paths if license_header_classify(path) is not None]
@@ -954,7 +918,6 @@ def scan_scope_summary(repo_root: Path) -> dict[str, object]:
         "scan_jobs": {
             job: {
                 "exclude_unsafe_wrappers": bool(profile.get("exclude_unsafe_wrappers")),
-                "exclude_nolint_allowed": bool(profile.get("exclude_nolint_allowed")),
                 "suffixes": (
                     sorted(job_suffixes)
                     if (job_suffixes := _profile_suffixes(profile)) is not None
@@ -965,7 +928,6 @@ def scan_scope_summary(repo_root: Path) -> dict[str, object]:
         },
         "unsafe_api_scan_steps": sorted(UNSAFE_API_SCAN_STEPS),
         "unsafe_wrapper_files": sorted(unsafe_wrapper_rel_paths(repo_root)),
-        "nolint_allowed_files": sorted(nolint_allowed_rel_paths(repo_root)),
         "nolint_enforced_source_count": len(iter_job_paths(repo_root, JOB_NOLINT)),
         "unsafe_enforced_source_count": len(iter_job_paths(repo_root, JOB_UNSAFE_API)),
     }

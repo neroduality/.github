@@ -1053,6 +1053,11 @@ def shell_script_paths(repo_root: Path) -> list[str]:
     return _shell_script_files(repo_root)
 
 
+def toolchain_llvm_major(repo_root: Path) -> int | None:
+    value = toolchain_block(repo_root).get("llvm_major")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def toolchain_script(repo_root: Path) -> Path | None:
     block = toolchain_block(repo_root)
     rel = block.get("script")

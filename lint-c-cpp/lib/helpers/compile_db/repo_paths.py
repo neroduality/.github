@@ -34,6 +34,21 @@ def _repo_rel_from_source_root_markers(posix: str, repo_root: Path) -> str | Non
     return None
 
 
+def repo_rel_strict(file_path: str | Path, repo_root: Path) -> str | None:
+    """Repo-relative path only for paths inside the repo or its container mount.
+
+    Unlike ``source_key`` there is no source-root marker fallback, so an SDK path
+    such as ``/opt/sdk/src`` never maps onto the project's ``src``.
+    """
+    path = Path(file_path)
+    try:
+        rel = path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        container = _repo_rel_from_container_absolute(path.as_posix())
+        return None if container is None else container.rstrip("/")
+    return "" if rel == "." else rel
+
+
 def source_key(file_path: str | Path, repo_root: Path) -> str | None:
     """Stable repo-relative key for a source path under any absolute prefix."""
     repo_root = repo_root.resolve()

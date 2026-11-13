@@ -17,6 +17,9 @@
 
 # Resolve clang-tidy, clang-format, and scan-build for lint parity across distros.
 # Minimum versions are read from tool-versions.yaml; this helper never installs tools.
+# Each tool resolves to the newest NAME-<major> or bare NAME on PATH. Set
+# LINT_KIT_LLVM_MAJOR to accept only that major (lint.sh sets it from the
+# consumer manifest's toolchain.llvm_major).
 #
 # Sourceable helpers (install-linux-deps.sh, lint.sh):
 #   lint_kit_ensure_clang_tidy
@@ -30,29 +33,69 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/tool_versions.sh"
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/format_toolchain.sh"
 
 LINT_KIT_CLANG_TIDY_MIN_VERSION="${LINT_KIT_CLANG_TIDY_MIN_VERSION:-$(lint_kit_tool_min_version clang_tidy)}"
-LINT_KIT_CLANG_TIDY_PREFERRED_MAJOR=21
 LINT_KIT_CLANG_FORMAT_MIN_VERSION="${LINT_KIT_CLANG_FORMAT_MIN_VERSION:-$(lint_kit_tool_min_version clang_format)}"
-LINT_KIT_SCAN_BUILD_MIN_VERSION="${LINT_KIT_CLANG_TIDY_MIN_VERSION}"
+
+# Major named in install hints: the pinned one, else the clang-tidy minimum.
+lint_kit_llvm_hint_major() {
+  printf '%s\n' "${LINT_KIT_LLVM_MAJOR:-${LINT_KIT_CLANG_TIDY_MIN_VERSION%%.*}}"
+}
 
 lint_kit_clang_tidy_hint() {
+  local major
+  major="$(lint_kit_llvm_hint_major)"
   printf '%s\n' \
     'hint: INSTALL_DEPS=1 bash make/install-linux-deps.sh' \
-    "      or: apt install clang-tidy-${LINT_KIT_CLANG_TIDY_PREFERRED_MAJOR} clang-tools-${LINT_KIT_CLANG_TIDY_PREFERRED_MAJOR}" \
+    "      or: apt install clang-tidy-${major} clang-tools-${major} (apt.llvm.org)" \
     '      or: install clang-tools-extra (Fedora)' >&2
 }
 
 lint_kit_clang_format_hint() {
+  local major
+  major="$(lint_kit_llvm_hint_major)"
   printf '%s\n' \
     'hint: INSTALL_DEPS=1 bash make/install-linux-deps.sh' \
-    "      or: apt install clang-format-${LINT_KIT_CLANG_TIDY_PREFERRED_MAJOR} clang-format-20" \
-    '      or: install clang-tools-extra (Fedora >=43)' >&2
+    "      or: apt install clang-format-${major} (apt.llvm.org)" \
+    '      or: install clang-tools-extra (Fedora)' >&2
 }
 
 lint_kit_scan_build_hint() {
   printf '%s\n' \
     'hint: INSTALL_DEPS=1 bash make/install-linux-deps.sh' \
-    "      or: apt install clang-tools-${LINT_KIT_CLANG_TIDY_PREFERRED_MAJOR}" \
+    '      or: apt install clang-tools' \
     '      or: install clang-tools-extra (Fedora)' >&2
+}
+
+# Resolved path of every NAME-<major> on PATH, newest major first, then NAME.
+lint_kit_llvm_tool_candidates() {
+  local name="${1:?}" candidate
+  while IFS= read -r candidate; do
+    command -v "${candidate}" 2>/dev/null || true
+  done < <(
+    { compgen -c -- "${name}-" || true; } |
+      sed -n "s/^${name}-\([0-9][0-9]*\)\$/\1/p" | sort -rnu | sed "s/^/${name}-/"
+    printf '%s\n' "${name}"
+  )
+}
+
+# Highest-version NAME at or above MIN; only LINT_KIT_LLVM_MAJOR when set.
+# VERSION_FN prints a candidate's version.
+lint_kit_find_llvm_tool() {
+  local name="$1" min="$2" version_fn="$3"
+  local candidate ver best="" best_ver=""
+  while IFS= read -r candidate; do
+    [[ -n ${candidate} && -x ${candidate} ]] || continue
+    ver="$("${version_fn}" "${candidate}")" || continue
+    [[ -n ${ver} ]] || continue
+    [[ -z ${LINT_KIT_LLVM_MAJOR:-} || ${ver%%.*} == "${LINT_KIT_LLVM_MAJOR}" ]] || continue
+    [[ "$(printf '%s\n%s\n' "$min" "$ver" | sort -V | head -n1)" == "$min" ]] || continue
+    if [[ -z ${best_ver} ]] ||
+      [[ "$(printf '%s\n%s\n' "$best_ver" "$ver" | sort -V | tail -n1)" == "$ver" ]]; then
+      best="${candidate}"
+      best_ver="${ver}"
+    fi
+  done < <(lint_kit_llvm_tool_candidates "${name}")
+  [[ -n ${best} ]] || return 1
+  printf '%s\n' "${best}"
 }
 
 lint_kit_clang_tidy_install_dir() {
@@ -97,50 +140,29 @@ lint_kit_clang_tidy_version_ge() {
   [[ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n1)" == "$want" ]]
 }
 
-lint_kit_clang_tidy_candidate_bins() {
-  local name
-  for name in clang-tidy-21 clang-tidy-20 clang-tidy-19 clang-tidy-18 clang-tidy; do
-    command -v "${name}" 2>/dev/null || true
-  done
-}
-
 lint_kit_find_clang_tidy() {
-  local candidate ver best="" best_ver=""
-  while IFS= read -r candidate; do
-    [[ -n ${candidate} && -x ${candidate} ]] || continue
-    ver="$(lint_kit_clang_tidy_version_raw "${candidate}")" || continue
-    lint_kit_clang_tidy_version_ge "$LINT_KIT_CLANG_TIDY_MIN_VERSION" "$ver" || continue
-    if [[ -z ${best_ver} ]] ||
-      [[ "$(printf '%s\n%s\n' "$best_ver" "$ver" | sort -V | tail -n1)" == "$ver" ]]; then
-      best="${candidate}"
-      best_ver="${ver}"
-    fi
-  done < <(lint_kit_clang_tidy_candidate_bins)
-  [[ -n ${best} ]] || return 1
-  printf '%s\n' "${best}"
+  lint_kit_find_llvm_tool clang-tidy "$LINT_KIT_CLANG_TIDY_MIN_VERSION" lint_kit_clang_tidy_version_raw
 }
 
+# run-clang-tidy of the same major: beside the resolved binary, then
+# run-clang-tidy-<major>, then bare.
 lint_kit_find_run_clang_tidy() {
   local tidy_bin="$1"
-  local base="${tidy_bin##*/}"
-  local candidate
+  local dir ver candidate
+  local -a names=()
 
-  case "${base}" in
-    clang-tidy-[0-9][0-9])
-      for candidate in "run-${base}" "run-${base}.py"; do
-        command -v "${candidate}" >/dev/null 2>&1 && {
-          command -v "${candidate}"
-          return 0
-        }
-      done
-      ;;
-  esac
-
-  for candidate in run-clang-tidy run-clang-tidy.py; do
-    command -v "${candidate}" >/dev/null 2>&1 && {
-      command -v "${candidate}"
+  dir="$(dirname -- "$(readlink -f -- "${tidy_bin}")")"
+  for candidate in "${dir}/run-clang-tidy" "${dir}/run-clang-tidy.py"; do
+    [[ -x ${candidate} ]] && {
+      printf '%s\n' "${candidate}"
       return 0
     }
+  done
+
+  ver="$(lint_kit_clang_tidy_version_raw "${tidy_bin}")" || ver=""
+  [[ -z ${ver} ]] || names+=("run-clang-tidy-${ver%%.*}" "run-clang-tidy-${ver%%.*}.py")
+  for candidate in "${names[@]}" run-clang-tidy run-clang-tidy.py; do
+    command -v "${candidate}" 2>/dev/null && return 0
   done
   return 1
 }
@@ -190,27 +212,8 @@ lint_kit_clang_format_version_ge() {
   [[ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n1)" == "$want" ]]
 }
 
-lint_kit_clang_format_candidate_bins() {
-  local name
-  for name in clang-format-21 clang-format-20 clang-format; do
-    command -v "${name}" 2>/dev/null || true
-  done
-}
-
 lint_kit_find_clang_format() {
-  local candidate ver best="" best_ver=""
-  while IFS= read -r candidate; do
-    [[ -n ${candidate} && -x ${candidate} ]] || continue
-    ver="$(lint_kit_clang_format_version_raw "${candidate}")" || continue
-    lint_kit_clang_format_version_ge "$LINT_KIT_CLANG_FORMAT_MIN_VERSION" "$ver" || continue
-    if [[ -z ${best_ver} ]] ||
-      [[ "$(printf '%s\n%s\n' "$best_ver" "$ver" | sort -V | tail -n1)" == "$ver" ]]; then
-      best="${candidate}"
-      best_ver="${ver}"
-    fi
-  done < <(lint_kit_clang_format_candidate_bins)
-  [[ -n ${best} ]] || return 1
-  printf '%s\n' "${best}"
+  lint_kit_find_llvm_tool clang-format "$LINT_KIT_CLANG_FORMAT_MIN_VERSION" lint_kit_clang_format_version_raw
 }
 
 lint_kit_ensure_clang_format() {
@@ -294,58 +297,24 @@ lint_kit_shfmt_fail_on_change() {
   lint_kit_formatter_ok_message "shfmt" "${scanned}" 0
 }
 
-lint_kit_scan_build_version_raw() {
-  local bin="${1:?}" ver base
-  [[ -x ${bin} ]] || return 1
-  ver="$("${bin}" --version 2>/dev/null |
-    sed -n \
-      -e 's/.*LLVM version \([0-9][0-9.]*\).*/\1/p' \
-      -e 's/.*scan-build version \([0-9][0-9.]*\).*/\1/p' |
-    head -n1)"
-  [[ -n ${ver} ]] && {
-    printf '%s\n' "${ver}"
-    return 0
-  }
-  base="$(basename "${bin}")"
-  [[ ${base} =~ ^scan-build-([0-9]+)$ ]] && {
-    printf '%s.0.0\n' "${BASH_REMATCH[1]}"
-    return 0
-  }
+# Presence only: the kit ships no scan-build config, so any LLVM version works.
+lint_kit_find_scan_build() {
+  local candidate
+  while IFS= read -r candidate; do
+    [[ -x ${candidate} ]] && {
+      printf '%s\n' "${candidate}"
+      return 0
+    }
+  done < <(lint_kit_llvm_tool_candidates scan-build)
   return 1
 }
 
-lint_kit_scan_build_version_ge() {
-  local want="$1"
-  local have="${2:?}"
-  [[ -n ${have} ]] || return 1
-  [[ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n1)" == "$want" ]]
-}
-
-lint_kit_find_scan_build() {
-  local name candidate ver best="" best_ver=""
-  for name in scan-build-21 scan-build-20 scan-build-19 scan-build-18; do
-    candidate="$(command -v "${name}" 2>/dev/null)" || continue
-    [[ -x ${candidate} ]] || continue
-    ver="$(lint_kit_scan_build_version_raw "${candidate}")" || continue
-    lint_kit_scan_build_version_ge "$LINT_KIT_SCAN_BUILD_MIN_VERSION" "$ver" || continue
-    if [[ -z ${best_ver} ]] ||
-      [[ "$(printf '%s\n%s\n' "$best_ver" "$ver" | sort -V | tail -n1)" == "$ver" ]]; then
-      best="${candidate}"
-      best_ver="${ver}"
-    fi
-  done
-  [[ -n ${best} ]] || return 1
-  printf '%s\n' "${best}"
-}
-
 lint_kit_ensure_scan_build() {
-  local scan_bin install_dir ver
+  local scan_bin install_dir
   scan_bin="$(lint_kit_find_scan_build)" || return 1
-  ver="$(lint_kit_scan_build_version_raw "${scan_bin}")" || return 1
   install_dir="$(lint_kit_clang_tidy_install_dir)"
   mkdir -p "${install_dir}"
   [[ ${scan_bin} == "${install_dir}/scan-build" ]] ||
     ln -sf "${scan_bin}" "${install_dir}/scan-build"
   lint_kit_export_tool_shim_dir "${install_dir}"
-  lint_kit_scan_build_version_ge "$LINT_KIT_SCAN_BUILD_MIN_VERSION" "$ver"
 }

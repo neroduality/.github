@@ -35,6 +35,16 @@ Sources: [References](#references).
 | Required non-null | `compile_db`, `enabled_lint_jobs`, `license_header`, `policy`, `scan` |
 | Required, may be `null` | `firmware_build`, `spec_traceability`, `toolchain`, `workflow`, `yamllint` |
 
+`toolchain.llvm_major` (integer or `null`) selects the clang-format and
+clang-tidy major for lint. `null` takes the newest `NAME-<major>` or bare
+`NAME` on `PATH` at or above the `tool-versions.yaml` minimum; an integer
+accepts only that major and must not be below the minimum. scan-build is
+presence-only and ignores it. Lint fails if `LINT_KIT_LLVM_MAJOR` is set in the
+environment to anything other than the manifest's value.
+
+The removed `policy.nolint_allowed` key is rejected: suppressions have no
+waiver list (see `nolint_audit` below).
+
 ## Config files
 
 | File | Role |
@@ -44,6 +54,7 @@ Sources: [References](#references).
 | `.clang-tidy-cxx` | Host C++ TUs |
 | `.clang-tidy-shared-c-cxx` | C++ under `policy.shared_c_cxx_source_roots` |
 | `.clang-tidy-unsafe-c` / `-cxx` | Banned APIs only |
+| `clang-tidy-coverage.yaml` | Families, alias table, and every check the main overlays leave out (with reason); self-test enforces it |
 | `openssf-hardening-manifest.yaml` | OpenSSF coverage + FULL cmake wiring |
 | `openssf-guide-tables.txt` | Snapshot of the guide's Table 1 and Table 2 tokens; self-test asserts the manifest covers every row |
 | `cppcheck-manifest.yaml` | cppcheck passes / CLI |
@@ -99,7 +110,7 @@ Lint section banners print the job ID for mapping to this table, e.g.
 | `guard_clause_style` | Early-return guards |
 | `pointer_bounds` | External buffer indexing |
 | `raii_lifetime` | RAII resource pairs |
-| `nolint_audit` | No NOLINT / cppcheck-suppress |
+| `nolint_audit` | No suppressions of any tool (always on; no waivers) |
 | `spec_traceability` | Spec traceability (if path exists) |
 | `cppcheck` | cppcheck |
 | `firmware_compile_db` | Firmware `compile_commands.json` (like `compile_db`) |
@@ -144,28 +155,49 @@ deb/rpm) opt all five in; bare-metal firmware consumers leave `cross` null.
 Positive `HeaderFilterRegex` only. No `ExcludeHeaderFilterRegex`. No
 `disabled_checks`. Unsafe overlays: APIs only.
 
-**Enabled families:** `clang-diagnostic-*`, `clang-analyzer-*` (incl. `optin.*`
-and `security.*`), `android-cloexec-*`, `bugprone-*`, `cert-*`,
-`concurrency-*`, `cppcoreguidelines-*`, `misc-*`, `modernize-*`,
-`performance-*`, `portability-*`, `readability-*`, plus the applicable
-`google-*` checks per overlay.
+**Explicit check lists:** every overlay starts with `-*` and names each check
+by its primary name; the only wildcard is `clang-diagnostic-*` (compiler
+warnings, governed by the build's own `-W` flags). A newer clang-tidy therefore
+never enables or renames checks behind the kit's back. A name that needs a
+newer clang-tidy means bumping the lint container's LLVM first;
+`tool-versions.yaml` minimums are the lower of the container's and Fedora 45's
+versions.
+
+**Every family check is decided:** the main overlays draw from
+`android-cloexec-*`, `bugprone-*`, `cert-*`, `clang-analyzer-*` (incl. the
+opt-in and `security.*` analyzer groups), `concurrency-*`,
+`cppcoreguidelines-*`, `google-*`, `misc-*`, `modernize-*`, `performance-*`,
+`portability-*` and `readability-*`. Each check clang-tidy offers in those
+families is either in the overlay's `Checks` or recorded under `left_out` in
+[`clang-tidy-coverage.yaml`](clang-tidy-coverage.yaml) with the overlays it is
+off for and why. The self-test lists every family on the resolved clang-tidy
+and fails on any check that is neither, so the checks a new LLVM release adds
+need a decision before the kit moves to it.
+
+**No aliases:** the overlays name primaries only. The coverage file carries
+clang-tidy's alias table; an alias is covered, or left out, with its primary.
+Aliases do not inherit the primary's `CheckOptions` and some carry different
+defaults, so naming both runs one check twice under two configurations, and an
+alias can quietly re-enable a check the kit leaves off. `cert-*` is now aliases
+only, so the overlays list no `cert-*` names; the CERT rules run under their
+primaries (e.g. ERR33-C is `bugprone-unused-return-value` with the CERT C
+function list in the unsafe overlays). `llvm-namespace-comment` is the one
+`llvm-*` check on, as the primary behind `google-readability-namespace-comments`
+with Google's spacing. Each overlay's `CheckOptions` may only configure checks it
+lists.
+
+The one thing a check list cannot switch off is the analyzer's
+`clang-analyzer-core.*` checkers: clang-tidy runs all of them once any
+analyzer check is on (a new release can add one, e.g.
+`core.NullPointerArithm` in LLVM 23). The main overlays name every core
+checker anyway, and the self-test compares each overlay's `--list-checks`
+output against its list.
 
 **Families intentionally not enabled:** `hicpp-*` (near-pure aliases of
 enabled checks; would double-report), vendor/domain families with no org
 consumer (`abseil-*`, `altera-*`, `boost-*`, `darwin-*`, `fuchsia-*`,
-`linuxkernel-*`, `llvm-*`, `llvmlibc-*`, `mpi-*`, `objc-*`, `openmp-*`,
-`zircon-*`).
-
-**Family-wide disables with rationale:**
-
-| Check | Why off |
-| --- | --- |
-| `android-cloexec-pipe` | Only remedy is `pipe2()` (not in the POSIX.1-2008 kit baseline); the sanctioned pattern is `fcntl(fd, F_SETFD, FD_CLOEXEC)` immediately after `pipe()` |
-| `concurrency-mt-unsafe` | Flags every `strerror`/`getenv`/`setenv` call site with no allowlist and NOLINT is forbidden; on glibc >= 2.32 `strerror` is thread-safe, and test mains legitimately use `setenv`. The real subset it would catch (`sigprocmask` vs `pthread_sigmask` in threaded processes) is a code-review item, not gateable. Same verdict for cppcheck's `threadsafety` addon (adds "stdout is MT-unsafe" noise on top) |
-| `misc-header-include-cycle` | Diagnoses cycles inside vendored toolchain cores (e.g. Arduino `Arduino.h` <-> `Serial.h`); the diagnostic escapes `HeaderFilterRegex` because its note chain anchors in a project include, and NOLINT is forbidden so it cannot be waived per-site |
-| `misc-include-cleaner` | Needs full IWYU-style header maps; noise on umbrella headers |
-| `misc-use-anonymous-namespace` | Google style allows either `static` or an unnamed namespace for internal linkage, and `misc-use-internal-linkage` (kept on) auto-fixes by adding `static` -- enabling both makes the fix of one the violation of the other |
-| `misc-no-recursion` | Recursion policy is owned by the `magic_literals` job, which allows explicitly annotated bounded recursion (`{PREFIX}_BOUNDED_RECURSION` + depth cap); NOLINT is forbidden so the tidy check cannot express that waiver |
+`linuxkernel-*`, `llvm-*` except `llvm-namespace-comment`, `llvmlibc-*`,
+`mpi-*`, `objc-*`, `openmp-*`, `zircon-*`).
 
 **Header roles (extension only):** `.h` -> c_compatible; `.hpp`/`.hh`/`.hxx` ->
 cxx_only. C++ overlays must not report shared `.h`. C++ in a c_compatible `.h`
@@ -248,16 +280,16 @@ ground is delegated to the tools; the table records the split.
 | Job | Delegated to tools | Custom-only remainder |
 | --- | --- | --- |
 | `banned_cxx_heap` | `malloc`-family via unsafe overlay `CustomFunctions`; `cppcoreguidelines-no-malloc` (unsafe-cxx) | C++ `new`/`delete` incl. placement forms; applies inside wrapper files too |
-| `banned_libc_io` | `bugprone-unsafe-functions`, `cert-err33-c`, `clang-analyzer-security.insecureAPI.*` (unsafe overlays) | Project wrapper allowlist (`policy.unsafe_api.wrapper_files`), C++ stream bans, raw fd stdout/stderr writes |
+| `banned_libc_io` | `bugprone-unsafe-functions`, `bugprone-unused-return-value` (CERT ERR33-C list), `clang-analyzer-security.insecureAPI.*` (unsafe overlays) | Project wrapper allowlist (`policy.unsafe_api.wrapper_files`), C++ stream bans, raw fd stdout/stderr writes |
 | `null_nodiscard` | `modernize-use-nullptr` stays off by design | Project `NULL`/`NODISCARD` macro convention (canonical null header) |
 | `relative_includes` | -- (no tidy/cppcheck equivalent) | Bans `../` in `#include` |
 | `duplicate_includes` | Exact repeats: `readability-duplicate-include` | `#pragma once` placement, mixed angle/quote dupes, macro-include dupes |
 | `shared_constant_dupes` | -- | One authoritative `{PREFIX}_*` numeric definition across the tree |
-| `magic_literals` | General magic numbers: `readability-magic-numbers` / `cppcoreguidelines-avoid-magic-numbers` | Constant placement (canonical headers), stack-array caps, bounded-recursion annotation (`misc-no-recursion` off; see above), printf-index gaps |
+| `magic_literals` | General magic numbers: `readability-magic-numbers` (its alias `cppcoreguidelines-avoid-magic-numbers` is not named separately) | Constant placement (canonical headers), stack-array caps, bounded-recursion annotation (`misc-no-recursion` off; see `clang-tidy-coverage.yaml`), printf-index gaps |
 | `guard_clause_style` | `readability-simplify-boolean-expr` covers trivial cases (off in C overlay) | Positive if/return-true wrapper shape |
 | `pointer_bounds` | `clang-analyzer-*` array bounds, cppcheck buffer checks, sanitizers | Anti-drift gate: span/copy helpers or explicit guards before external-buffer subscripts |
 | `raii_lifetime` | `clang-analyzer-unix.Malloc` style leak paths | Project acquire/release pair registry (`policy.resource_lifetime`) |
-| `nolint_audit` | -- (meta) | Forbids `NOLINT` / `cppcheck-suppress`; keeps both engines honest |
+| `nolint_audit` | -- (meta) | Mandatory in `enabled_lint_jobs` (manifest validation rejects a list without it) and runs repo-wide, with no waiver list. Forbids inline disables for every tool (`NOLINT`, `cppcheck-suppress`, `clang-format off`, `shellcheck disable=`, `noqa`, `type: ignore`, `mypy:`/`pylint:`/`fmt:` directives, `markdownlint-disable`, `yamllint disable`, `zizmor: ignore`, `codespell:ignore`, `LCOV_EXCL`/`GCOVR_EXCL`), C/C++ compiler and analyzer escapes (`#pragma GCC/clang diagnostic ignored/warning`, MSVC `warning(disable` / `warning(push, 0)`, IAR/TI/NVCC `diag_suppress`/`diag_remark`/`diag_warning`, `system_header`, `_Pragma`, `[[clang::suppress]]` / `__attribute__((suppress))`, `no_sanitize`, `__clang_analyzer__` / `__CPPCHECK__` branches), per-function hardening overrides (`#pragma GCC optimize`, `optimize` attributes, `no_stack_protector`, `nocf_check`), the same comment rules in `.inc`/`.inl`/`.ipp`/`.tpp`/`.tcc`/`.ixx`/`.cppm` fragments, warning-off build flags outside comments (`-Wno-*` in any build, CI, script or preset file; `-w` / `--no-warnings` in CMake (incl. `CMakePresets.json`), Make, Meson and Arduino `build_opt.h` / `*.local.txt` files, and `-w` as the value of a compiler-flag variable such as `CFLAGS` or `CMAKE_C_FLAGS` in any file). The OpenSSF compile-DB audit checks the real commands of every scanned TU: host TUs may carry no `-w`, `--no-warnings` or `-Wno-*`; firmware TUs only those the SDK puts on its own TUs in the same database (e.g. the Arduino core's `-Wno-error`); and no TU may mark a directory holding project sources as a system include directory (`-isystem`, `-idirafter`, `-iwithprefix`, CMake `SYSTEM`), while vendored and SDK directories outside the scan scope stay allowed, and repo-local tool config (`.clang-tidy`, `.clang-format`, `.shellcheckrc`, `.codespellrc`, `.markdownlint*`, `.yamllint*`, `ruff.toml`, `mypy.ini`, pyproject/setup.cfg/tox.ini tool sections; `zizmor.yml` / `zizmor.yaml` stay allowed because the consumer, not the kit, runs zizmor). shellcheck also runs with `--norc` and ruff with `--ignore-noqa` |
 | `spec_traceability` | -- | Spec manifest <-> source literal cross-check |
 
 ## Linting the kit itself
@@ -271,19 +303,26 @@ source lib/helpers/toolchain/tool_versions.sh
 ruff="ruff@$(lint_kit_tool_min_version ruff)"
 mypy="mypy@$(lint_kit_tool_min_version mypy)"
 
-# Unit tests for every lint job and generator.
+# Unit tests for every lint job and generator; also audits the kit's own
+# sources for suppressions (same rules as the consumer nolint_audit job).
+# The clang-tidy tests fail when clang-tidy is missing; set
+# LINT_KIT_SELF_TEST_ALLOW_NO_CLANG_TIDY=1 to skip them instead.
 bash lint-c-cpp.sh self-test
+
+# Run one kit Python helper with the kit's PYTHONPATH, e.g. a policy self-test.
+bash lint-c-cpp.sh python lib/helpers/policy/policy_runner.py --self-test --script nolint_audit.py
 
 # Shell: format check and lint (shfmt -w instead of -d rewrites).
 shfmt -d -i 2 -ci -s $(git ls-files '*.sh')
-shellcheck -S warning -x -P SCRIPTDIR $(git ls-files '*.sh')
+env -u SHELLCHECK_OPTS shellcheck --norc -S warning -x -P SCRIPTDIR $(git ls-files '*.sh')
 
 # Python: format check, lint, types (drop --check to rewrite; ruff check --fix).
 uvx "$ruff" format --config config/ruff.toml --check .
-uvx "$ruff" check --config config/ruff.toml .
+uvx "$ruff" check --ignore-noqa --config config/ruff.toml .
 uvx "$mypy" --config-file config/mypy.ini --no-incremental lib
 
-# Markdown.
+# Spelling and Markdown.
+codespell lib config cmake lint-c-cpp.sh
 markdownlint --config config/.markdownlint.yaml config/README.md
 ```
 

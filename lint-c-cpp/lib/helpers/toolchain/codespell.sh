@@ -17,7 +17,7 @@
 
 # Typo detection via codespell -- no hunspell / project wordlist maintenance.
 #
-# codespell flags common misspellings (teh, recieve, ...), not unknown vocabulary.
+# codespell flags common misspellings, not unknown vocabulary.
 # Markdown code fences and HTML license comments are stripped; URLs and hex literals
 # are ignored so technical docs stay low-noise without a custom dictionary.
 #
@@ -97,13 +97,11 @@ EOF
   repo_root="$(cd -- "$repo_root" && pwd)"
 
   # License HTML blocks and fenced code (inline `code` stays checked -- usually prose).
-  # shellcheck disable=SC2016
-  local IGNORE_MULTILINE_REGEX='(?s)<!--.*?-->|\`\`\`.*?(\`\`\`|$)'
+  local IGNORE_MULTILINE_REGEX='(?s)<!--.*?-->|\x60{3}.*?(\x60{3}|$)'
 
   # URLs, hex, email-ish tokens, long uppercase acronyms, snake_case identifiers,
   # and C/C++ #include directive paths (compiler-verified filenames, not prose --
-  # spell-checking them only false-positives on library/vendor names like Synopsys).
-  # shellcheck disable=SC2016
+  # spell-checking them only false-positives on library and vendor names).
   local IGNORE_REGEX='(\bhttps?://\S+\b|\b0x[0-9A-Fa-f]+\b|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|\b[A-Z][A-Z0-9_]{2,}\b|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|^[ \t]*#[ \t]*include[ \t]*[<"][^">]*[">])'
 
   local SKIP_GLOBS='*.png,*.jpg,*.jpeg,*.gif,*.webp,*.svg,*.ico,*.bin,*.hex,*.pdf,build,build-*,dist,third-party,_deps,node_modules,.git'

@@ -136,7 +136,7 @@ EOF
   fi
 
   if ((check_config == 1)); then
-    printf 'uvx ruff@%s check --config %q' "$LINT_KIT_RUFF_VERSION" "${LINT_KIT_PYTHON_CONFIG_DIR}/ruff.toml"
+    printf 'uvx ruff@%s check --ignore-noqa --config %q' "$LINT_KIT_RUFF_VERSION" "${LINT_KIT_PYTHON_CONFIG_DIR}/ruff.toml"
     printf ' %q' "${targets[@]}"
     printf '\nuvx mypy@%s --config-file %q --no-incremental' "$LINT_KIT_MYPY_VERSION" "${LINT_KIT_PYTHON_CONFIG_DIR}/mypy.ini"
     printf ' %q' "${targets[@]}"
@@ -152,7 +152,7 @@ EOF
 
   cd "$repo_root"
 
-  uvx "ruff@${LINT_KIT_RUFF_VERSION}" check \
+  uvx "ruff@${LINT_KIT_RUFF_VERSION}" check --ignore-noqa \
     --config "${LINT_KIT_PYTHON_CONFIG_DIR}/ruff.toml" "${targets[@]}"
 
   uvx "mypy@${LINT_KIT_MYPY_VERSION}" \

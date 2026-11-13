@@ -46,6 +46,7 @@ FULL_PROFILE = (
     "node",
 )
 WORKFLOW_PROFILE = ("python3",)
+LLVM_TOOLS = frozenset({"clang_format", "clang_tidy"})
 
 
 @dataclass(frozen=True)
@@ -104,15 +105,68 @@ def _run(argv: list[str], *, timeout: float = 10.0) -> subprocess.CompletedProce
 def resolve_binary(tool_key: str, spec: dict) -> str | None:
     if tool_key == "node":
         return shutil.which("node") or shutil.which("nodejs")
-    names = spec.get("binaries")
-    if isinstance(names, list) and names:
-        for name in names:
-            if isinstance(name, str) and name.strip():
-                path = shutil.which(name.strip())
-                if path:
-                    return path
-        return None
+    if tool_key in LLVM_TOOLS:
+        best = resolve_llvm_tool(tool_key, spec)
+        return best[0] if best else None
     return shutil.which(tool_key.replace("_", "-")) or shutil.which(tool_key)
+
+
+def llvm_major_pin() -> int | None:
+    raw = os.environ.get("LINT_KIT_LLVM_MAJOR", "").strip()
+    return int(raw) if raw.isdigit() else None
+
+
+def llvm_candidates(name: str) -> list[str]:
+    """Resolved path of every NAME-<major> on PATH, newest major first, then NAME."""
+    pattern = re.compile(rf"{re.escape(name)}-(\d+)")
+    majors: set[int] = set()
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            children = list(Path(entry or ".").iterdir())
+        except OSError:
+            continue
+        for child in children:
+            match = pattern.fullmatch(child.name)
+            if match:
+                majors.add(int(match.group(1)))
+    names = [f"{name}-{major}" for major in sorted(majors, reverse=True)] + [name]
+    return [path for path in (shutil.which(item) for item in names) if path]
+
+
+def resolve_llvm_tool(tool_key: str, spec: dict) -> tuple[str, str] | None:
+    """Highest-version (binary, version) at or above min; only the pinned major when set."""
+    want = str(spec.get("min", "0"))
+    pin = llvm_major_pin()
+    best: tuple[str, str] | None = None
+    for binary in llvm_candidates(tool_key.replace("_", "-")):
+        have = probe_version(tool_key, binary)
+        if not have or not version_ge(have, want):
+            continue
+        if pin is not None and parse_version(have)[0] != pin:
+            continue
+        if best is None or parse_version(have) > parse_version(best[1]):
+            best = (binary, have)
+    return best
+
+
+def verify_llvm_tool(tool_key: str, spec: dict) -> list[ToolIssue]:
+    label = tool_key.replace("_", "-")
+    want = str(spec.get("min", "0"))
+    pin = llvm_major_pin()
+    if pin is not None and pin < parse_version(want)[0]:
+        return [
+            ToolIssue(
+                tool_key,
+                f"toolchain.llvm_major {pin} is below the kit's {label} minimum {want} "
+                f"({_MANIFEST.name})",
+            )
+        ]
+    if resolve_llvm_tool(tool_key, spec) is not None:
+        return []
+    need = f"{label} {pin}.x" if pin is not None else f"{label} >= {want}"
+    found = [f"{path} ({probe_version(tool_key, path) or '?'})" for path in llvm_candidates(label)]
+    detail = f"; found: {', '.join(found)}" if found else ""
+    return [ToolIssue(tool_key, f"required lint tool not found: {need}{detail}")]
 
 
 def probe_version(tool_key: str, binary: str) -> str | None:
@@ -189,12 +243,12 @@ def probe_version(tool_key: str, binary: str) -> str | None:
 
 
 def verify_tool(tool_key: str, spec: dict) -> list[ToolIssue]:
+    if tool_key in LLVM_TOOLS:
+        return verify_llvm_tool(tool_key, spec)
     issues: list[ToolIssue] = []
     binary = resolve_binary(tool_key, spec)
     if binary is None:
         label = tool_key.replace("_", "-")
-        if isinstance(spec.get("binaries"), list):
-            label = " or ".join(str(name) for name in spec["binaries"])
         issues.append(ToolIssue(tool_key, f"required lint tool not found: {label}"))
         return issues
 
@@ -314,6 +368,39 @@ def run_self_test() -> int:
             failures.append("verify must fail when cppcheck is too old")
         if "cppcheck 1.0.0 < required" not in result.stderr:
             failures.append("verify must report under-version cppcheck")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bindir = Path(tmp)
+        for name, version in (
+            ("clang-tidy", "23.1.0"),
+            ("clang-tidy-22", "22.1.0"),
+            ("clang-tidy-24", "24.0.1"),
+        ):
+            fake = bindir / name
+            fake.write_text(f"#!/bin/sh\necho 'LLVM version {version}'\n", encoding="utf-8")
+            fake.chmod(0o755)
+        saved = {key: os.environ.get(key) for key in ("PATH", "LINT_KIT_LLVM_MAJOR")}
+        spec = {"min": "23.0.0"}
+        try:
+            os.environ["PATH"] = str(bindir)
+            os.environ.pop("LINT_KIT_LLVM_MAJOR", None)
+            if resolve_binary("clang_tidy", spec) != str(bindir / "clang-tidy-24"):
+                failures.append("unpinned clang-tidy must resolve to the newest NAME-<major>")
+            os.environ["LINT_KIT_LLVM_MAJOR"] = "23"
+            if resolve_binary("clang_tidy", spec) != str(bindir / "clang-tidy"):
+                failures.append("LINT_KIT_LLVM_MAJOR=23 must accept a bare clang-tidy 23")
+            os.environ["LINT_KIT_LLVM_MAJOR"] = "25"
+            if "clang-tidy 25.x" not in verify_llvm_tool("clang_tidy", spec)[0].message:
+                failures.append("a missing pinned major must be reported")
+            os.environ["LINT_KIT_LLVM_MAJOR"] = "22"
+            if "below the kit's" not in verify_llvm_tool("clang_tidy", spec)[0].message:
+                failures.append("a pinned major under the kit minimum must be rejected")
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     if failures:
         for failure in failures:

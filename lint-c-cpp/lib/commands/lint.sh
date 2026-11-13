@@ -80,6 +80,23 @@ read_scan_paths_into() {
   rm -f "$paths_file"
 }
 
+# The manifest's toolchain.llvm_major is the only source of the pin; an
+# environment value that disagrees with it is an error, not an override.
+manifest_llvm_major="$(
+  python3 - <<'PY'
+from pathlib import Path
+from consumer_manifest import toolchain_llvm_major
+print(toolchain_llvm_major(Path.cwd().resolve()) or "")
+PY
+)"
+if [[ -n ${LINT_KIT_LLVM_MAJOR:-} && ${LINT_KIT_LLVM_MAJOR} != "${manifest_llvm_major}" ]]; then
+  printf 'error: LINT_KIT_LLVM_MAJOR=%s conflicts with toolchain.llvm_major (%s) in .github/lint-c-cpp.yaml; unset it or change the manifest\n' \
+    "${LINT_KIT_LLVM_MAJOR}" "${manifest_llvm_major:-null}" >&2
+  exit 1
+fi
+LINT_KIT_LLVM_MAJOR="${manifest_llvm_major}"
+export LINT_KIT_LLVM_MAJOR
+
 toolchain_script_path="$(
   python3 - <<'PY'
 from pathlib import Path
@@ -433,7 +450,7 @@ if lint_job_enabled format; then
   fi
   if want_tool shellcheck "bash script linting"; then
     if ((${#shell_targets[@]} > 0)); then
-      run shellcheck -S warning -x -P SCRIPTDIR "${shell_targets[@]}"
+      run env -u SHELLCHECK_OPTS shellcheck --norc -S warning -x -P SCRIPTDIR "${shell_targets[@]}"
       if ((${#shell_targets[@]} == 1)); then
         printf 'shellcheck: OK (1 shell script checked)\n'
       else
@@ -645,20 +662,19 @@ else
   skip_lint_job raii_lifetime
 fi
 
-if lint_job_enabled nolint_audit; then
-  section nolint_audit "Audit NOLINT / cppcheck inline suppressions (forbidden)"
-  run_python_policy_linter policy/nolint_audit.py "remove NOLINT and cppcheck-suppress outside policy.nolint_allowed; fix the underlying issue instead."
-else
-  skip_lint_job nolint_audit
-fi
+# Always on, whatever enabled_lint_jobs says: dropping the job must not be a way
+# to bring suppressions back.
+section nolint_audit "Audit suppressions: inline disables, compiler pragmas, repo-local tool config (forbidden)"
+run_python_policy_linter policy/nolint_audit.py "remove the suppression or repo-local tool config and fix the underlying finding; the kit allows no waivers."
 
 if lint_job_enabled spec_traceability; then
-  if python3 - "$repo_root" <<'PY'; then
+  if python3 - "$repo_root" <<'PY'
 import sys
 from pathlib import Path
 from consumer_manifest import spec_traceability_path
 sys.exit(0 if spec_traceability_path(Path(sys.argv[1])) else 1)
 PY
+  then
     section spec_traceability "Verify spec traceability manifest"
     want_pyyaml "spec traceability"
     run_python_policy_linter policy/spec_traceability.py "update docs/spec-traceability.yaml or fix source literals."

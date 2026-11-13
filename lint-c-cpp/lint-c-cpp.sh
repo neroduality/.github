@@ -38,6 +38,8 @@ Commands:
   workflow-lint       Validate GitHub Actions workflow container policy
   tools [args...]     tool_versions_check.py (verify, resolve, ...)
   self-test           Run lint-c-cpp unit tests
+  python <script> [args...]
+                      Run a kit Python helper (lib/...) with the kit's PYTHONPATH
 
 Options for lint:
   --custom-lints-only   Stop before compile DB / cppcheck / clang-tidy / firmware DB+build
@@ -74,6 +76,13 @@ case "$cmd" in
     ;;
   self-test)
     exec python3 "${tests}/lint_self_test.py" "$@"
+    ;;
+  python | py)
+    if (($# == 0)); then
+      printf 'error: python needs a script path\n' >&2
+      exit 2
+    fi
+    exec python3 "$@"
     ;;
   -h | --help | help)
     usage

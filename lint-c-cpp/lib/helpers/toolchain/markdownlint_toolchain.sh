@@ -174,7 +174,6 @@ if [[ ${1:-} == '--version' ]]; then echo '0.49.0'; exit 0; fi
 exit 0
 EOF
   chmod +x "${fakebin}/markdownlint"
-  # shellcheck disable=SC2030
   PATH="${fakebin}:${PATH}" lint_kit_markdownlint_version_ge 0.48.0 || {
     rm -rf "${tmp}"
     return 1

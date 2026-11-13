@@ -25,25 +25,11 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-_POLICY_DIR = Path(__file__).resolve().parent
-_LINT_LIB = _POLICY_DIR.parents[1]
-if str(_LINT_LIB) not in sys.path:
-    sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
-
-_bootstrap_lint_pythonpath()
-for _core_sub in ("manifest", "scan", "tools", "workflow"):
-    _entry = str(_LINT_LIB / "core" / _core_sub)
-    if _entry not in sys.path:
-        sys.path.insert(0, _entry)
-if str(_POLICY_DIR) not in sys.path:
-    sys.path.insert(0, str(_POLICY_DIR))
-
-from consumer_manifest import resolve_scan_paths  # noqa: E402
-from policy_config import PolicyConfig  # noqa: E402
-from policy_prepare import build_config, prepare_paths  # noqa: E402
-from policy_self_test import run as run_policy_self_test  # noqa: E402
-from scan_policy import (  # noqa: E402
+from consumer_manifest import resolve_scan_paths
+from policy_config import PolicyConfig
+from policy_prepare import build_config, prepare_paths
+from policy_self_test import run as run_policy_self_test
+from scan_policy import (
     JOB_LICENSE,
     JOB_NOLINT,
     JOB_SOURCE,
@@ -52,6 +38,9 @@ from scan_policy import (  # noqa: E402
     bootstrap_scan_manifest,
     read_paths_file,
 )
+
+_POLICY_DIR = Path(__file__).resolve().parent
+_LINT_LIB = _POLICY_DIR.parents[1]
 
 SCRIPT_SCAN_JOBS: dict[str, str] = {
     "banned_libc_io.py": JOB_UNSAFE_API,
@@ -101,7 +90,11 @@ def _resolve_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def _run_lint(
-    module: ModuleType, config: PolicyConfig, paths: list[Path], extras: list[str]
+    module: ModuleType,
+    config: PolicyConfig,
+    paths: list[Path],
+    extras: list[str],
+    fix_hint_override: str = "",
 ) -> int:
     if hasattr(module, "run"):
         return int(module.run(config, paths, extras))
@@ -112,7 +105,7 @@ def _run_lint(
 
     errors = lint_fn(paths, config)
     title = getattr(module, "LINT_TITLE", "policy")
-    fix_hint = getattr(module, "LINT_FIX_HINT", "")
+    fix_hint = fix_hint_override or getattr(module, "LINT_FIX_HINT", "")
     ok_detail = getattr(module, "LINT_OK_DETAIL", "")
 
     if errors:
@@ -167,10 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     paths = prepare_paths(args.script, repo_root, raw_paths)
     config = build_config(repo_root, paths)
 
-    if args.fix_hint:
-        module.LINT_FIX_HINT = args.fix_hint  # type: ignore[attr-defined]
-
-    return _run_lint(module, config, paths, extras)
+    return _run_lint(module, config, paths, extras, args.fix_hint or "")
 
 
 if __name__ == "__main__":

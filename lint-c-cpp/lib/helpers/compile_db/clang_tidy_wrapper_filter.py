@@ -31,13 +31,9 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
-_LINT_LIB = Path(__file__).resolve().parents[2]
-if str(_LINT_LIB) not in sys.path:
-    sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
+from scan_policy import bootstrap_scan_manifest, path_is_unsafe_wrapper
 
-_bootstrap_lint_pythonpath()
-from scan_policy import bootstrap_scan_manifest, path_is_unsafe_wrapper  # noqa: E402
+_LINT_LIB = Path(__file__).resolve().parents[2]
 
 _DIAG = re.compile(r"^(.+?):(\d+):(\d+): (error|warning|note):")
 _CHECK = re.compile(r"\[([^\]]+)\]\s*$")

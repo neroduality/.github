@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import platform
 import re
 import shlex
@@ -38,38 +39,30 @@ try:
 except ImportError:
     yaml = None
 
-_LINT_LIB = Path(__file__).resolve().parents[2]
-_DEFAULT_LINT_KIT = _LINT_LIB.parent
-if str(_LINT_LIB) not in sys.path:
-    sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
-
-_bootstrap_lint_pythonpath()
-
-from policy_overrides import (  # noqa: E402  (needs bootstrap above)
-    OPENSSF_HOST_ONLY_GENEX_FLAGS,
-    OPENSSF_HOST_ONLY_PROBE_FLAGS,
-    normalize_openssf_cross_opt_in,
-)
-
-_POLICY_DIR = Path(__file__).resolve().parent
-if str(_POLICY_DIR) not in sys.path:
-    sys.path.insert(0, str(_POLICY_DIR))
-from compile_db_util import (  # noqa: E402
+from compile_db_util import (
     cmake_generator,
     entry_command,
     is_cross_compile_command,
     storage_key_prefers_firmware_compile,
 )
-from consumer_manifest import discover_hardening_cmake_roots  # noqa: E402
-from policy_paths import (  # noqa: E402
+from consumer_manifest import discover_hardening_cmake_roots
+from policy_overrides import (
+    OPENSSF_HOST_ONLY_GENEX_FLAGS,
+    OPENSSF_HOST_ONLY_PROBE_FLAGS,
+    normalize_openssf_cross_opt_in,
+)
+from policy_paths import (
     add_hardening_path_args,
     central_scan_paths,
     load_cmake_paths,
     load_paths,
 )
-from repo_paths import source_key  # noqa: E402
-from scan_policy import JOB_CMAKE, JOB_SOURCE  # noqa: E402
+from repo_paths import repo_rel_strict, source_key
+from scan_policy import JOB_CMAKE, JOB_SOURCE, path_in_scan_scope
+
+_LINT_LIB = Path(__file__).resolve().parents[2]
+_DEFAULT_LINT_KIT = _LINT_LIB.parent
+_POLICY_DIR = Path(__file__).resolve().parent
 
 DEFAULT_REQUIRED_MODULES = (
     "Hardening.cmake",
@@ -1981,6 +1974,115 @@ def _warning_related_override(name: str, tokens: list[str], *, as_error: bool) -
     return None
 
 
+def warning_silencing_options(tokens: list[str]) -> list[str]:
+    """Options that switch a warning (or its -Werror) off: -w, --no-warnings, -Wno-*."""
+    return sorted(
+        {token for token in tokens if token in ("-w", "--no-warnings") or token.startswith("-Wno-")}
+    )
+
+
+# Include options in match order (longest first): "system" options make their
+# directory a system include directory, whose headers' warnings are suppressed.
+_INCLUDE_DIR_OPTIONS = (
+    ("-iwithprefixbefore", "user"),
+    ("-iwithprefix", "system-prefixed"),
+    ("-iprefix", "prefix"),
+    ("-isystem-after", "system"),
+    ("-cxx-isystem", "system"),
+    ("-isystem", "system"),
+    ("-idirafter", "system"),
+)
+
+
+def system_include_dirs(tokens: list[str], directory: str) -> list[str]:
+    """Directories a compile command marks as system include directories."""
+    found: list[str] = []
+    prefix = ""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        for option, kind in _INCLUDE_DIR_OPTIONS:
+            if token == option and index + 1 < len(tokens):
+                value = tokens[index + 1]
+                index += 1
+            elif token.startswith(option) and len(token) > len(option):
+                value = token[len(option) :]
+            else:
+                continue
+            if kind == "prefix":
+                prefix = value
+            elif kind == "system-prefixed":
+                found.append(prefix + value)
+            elif kind == "system":
+                found.append(value)
+            break
+        index += 1
+    return [value if Path(value).is_absolute() else str(Path(directory) / value) for value in found]
+
+
+def project_system_include_dirs(
+    entry: dict[str, Any], tokens: list[str], repo_root: Path, project_keys: set[str]
+) -> list[str]:
+    """System include directories that hold scanned project sources (warnings hidden)."""
+    hidden: set[str] = set()
+    for raw in system_include_dirs(tokens, str(entry.get("directory", ""))):
+        rel = repo_rel_strict(raw, repo_root)
+        if rel is None:
+            continue
+        if any(not rel or key == rel or key.startswith(rel + "/") for key in project_keys):
+            hidden.add(rel or ".")
+    return sorted(hidden)
+
+
+def firmware_sdk_silencing_baseline(db_path: Path, repo_root: Path) -> frozenset[str]:
+    """Warning-off options the SDK puts on its own TUs (outside the scan scope)."""
+    try:
+        raw_entries = json.loads(db_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    baseline: set[str] = set()
+    for raw in raw_entries if isinstance(raw_entries, list) else []:
+        if not isinstance(raw, dict) or not raw.get("file"):
+            continue
+        file_path = Path(str(raw["file"]))
+        if not file_path.is_absolute():
+            file_path = Path(str(raw.get("directory", ""))) / file_path
+        rel = repo_rel_strict(file_path, repo_root)
+        if rel is not None and path_in_scan_scope(rel, repo_root):
+            continue
+        baseline.update(warning_silencing_options(compile_entry_tokens(raw)))
+    return frozenset(baseline)
+
+
+def warning_escape_issues(
+    entry: dict[str, Any],
+    rel: str,
+    *,
+    repo_root: Path,
+    project_keys: set[str],
+    allowed_silencers: frozenset[str] = frozenset(),
+    label_prefix: str = "",
+) -> list[str]:
+    tokens = compile_entry_tokens(entry)
+    issues: list[str] = []
+    silencers = [
+        item for item in warning_silencing_options(tokens) if item not in allowed_silencers
+    ]
+    if silencers:
+        origin = " beyond the SDK's own flags" if label_prefix else ""
+        issues.append(
+            f"compile_commands warning audit: {label_prefix}{rel}: {' '.join(silencers)} "
+            f"switches warnings off{origin}; fix the code instead"
+        )
+    hidden = project_system_include_dirs(entry, tokens, repo_root, project_keys)
+    if hidden:
+        issues.append(
+            f"compile_commands warning audit: {label_prefix}{rel}: system include directory "
+            f"{', '.join(hidden)} holds project sources and hides their warnings; use -I"
+        )
+    return issues
+
+
 def _warning_not_in_effect(flag: str, tokens: list[str]) -> str | None:
     if "-w" in tokens:
         return "-w"
@@ -2419,6 +2521,9 @@ def verify_compile_commands_openssf(
     deferred_missing_entry: list[tuple[str, str]] = []
     hardened_hosts: list[tuple[Path, str]] = []
     firmware_audited: set[str] = set()
+    project_keys = {
+        rel for rel in (repo_rel_strict(path, repo_root) for path in source_paths) if rel
+    }
 
     def _audit_one(
         *,
@@ -2488,6 +2593,8 @@ def verify_compile_commands_openssf(
         probe_cache = cross_probes_by_db.get(db_rel, {})
         build_dir: Path | None = (repo_root / db_rel).parent
         label = f"[{db_rel}] "
+        # Firmware SDKs put their own -w / -Wno-* on every TU; only additions count.
+        sdk_silencers = firmware_sdk_silencing_baseline(repo_root / db_rel, repo_root)
         for source in source_paths:
             if source.suffix.lower() not in _COMPILE_SUFFIXES:
                 continue
@@ -2504,6 +2611,16 @@ def verify_compile_commands_openssf(
             if entry is None:
                 continue
             rel = source.relative_to(repo_root).as_posix()
+            issues.extend(
+                warning_escape_issues(
+                    entry,
+                    rel,
+                    repo_root=repo_root,
+                    project_keys=project_keys,
+                    allowed_silencers=sdk_silencers,
+                    label_prefix=label,
+                )
+            )
             _audit_one(
                 source=source,
                 lookup_key=lookup_key,
@@ -2549,6 +2666,9 @@ def verify_compile_commands_openssf(
             build_dir = (repo_root / provenance[0]).parent
         else:
             build_dir = _owning_build_dir_for_lookup(repo_root, lookup_key)
+        issues.extend(
+            warning_escape_issues(entry, rel, repo_root=repo_root, project_keys=project_keys)
+        )
         _audit_one(
             source=source,
             lookup_key=lookup_key,
@@ -4031,7 +4151,6 @@ target_link_libraries(core PUBLIC hardening)
             "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
             "      source: userspace\n"
             "policy:\n  constants_headers: [limits.h]\n"
-            "  nolint_allowed: null\n"
             "  resource_lifetime: null\n"
             "  shared_c_cxx_source_roots: null\n"
             "  overrides:\n"

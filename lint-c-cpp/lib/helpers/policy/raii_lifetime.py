@@ -62,6 +62,9 @@ def lint(paths: list[Path], config: PolicyConfig) -> list[str]:
     return [issue for path in paths for issue in scan_file(path, config)]
 
 
+_SELF_TEST_CASES: dict[str, tuple[str, set[str]]] = {}
+
+
 def prepare_self_test_repo(root: Path) -> None:
     glob_canonical = "sample_glob_raii.h"
     file_canonical = "sample_file_raii.h"
@@ -197,13 +200,13 @@ def prepare_self_test_repo(root: Path) -> None:
     )
     for name, (content, _) in cases.items():
         (app / name).write_text(content, encoding="utf-8")
-    prepare_self_test_repo._cases = cases  # type: ignore[attr-defined]
+    _SELF_TEST_CASES.clear()
+    _SELF_TEST_CASES.update(cases)
 
 
 def verify_self_test(errors: list[str]) -> int:
-    cases = prepare_self_test_repo._cases  # type: ignore[attr-defined]
     reported = {Path(err.split(":", 2)[0]).name for err in errors}
-    for name, (_, expected) in cases.items():
+    for name, (_, expected) in _SELF_TEST_CASES.items():
         if expected and name not in reported:
             print(f"self-test miss: {name}", file=sys.stderr)
             return 1

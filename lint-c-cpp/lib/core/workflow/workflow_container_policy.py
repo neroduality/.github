@@ -24,12 +24,7 @@ import sys
 from itertools import chain
 from pathlib import Path
 
-_LINT_LIB = Path(__file__).resolve().parents[2]
-if str(_LINT_LIB) not in sys.path:
-    sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
-
-_bootstrap_lint_pythonpath()
+from consumer_manifest import workflow_bare_vm_waivers
 
 try:
     import yaml
@@ -37,7 +32,7 @@ except ImportError:
     print("error: PyYAML is required for workflow lint", file=sys.stderr)
     raise SystemExit(2) from None
 
-from consumer_manifest import workflow_bare_vm_waivers  # noqa: E402
+_LINT_LIB = Path(__file__).resolve().parents[2]
 
 
 def valid_container(value: object) -> bool:

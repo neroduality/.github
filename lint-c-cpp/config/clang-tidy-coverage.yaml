@@ -1,0 +1,356 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright (C) 2026 Nero Duality, LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Coverage decisions for the main clang-tidy overlays (.clang-tidy-c,
+# .clang-tidy-cxx, .clang-tidy-shared-c-cxx). Every check the resolved
+# clang-tidy offers in `families` must be named in the overlay's Checks or left
+# out below for that overlay; the self-test fails on any other check, so a new
+# LLVM release's checks need a decision before the kit moves to it.
+
+families:
+  - android-cloexec
+  - bugprone
+  - cert
+  - clang-analyzer
+  - concurrency
+  - cppcoreguidelines
+  - google
+  - misc
+  - modernize
+  - performance
+  - portability
+  - readability
+
+# clang-tidy's "Check aliases" table (LLVM 23). Overlays name the primary only:
+# an alias is covered, or left out, with its primary. Aliases do not inherit the
+# primary's CheckOptions and some carry different defaults, so naming both would
+# run the same check twice under two configurations.
+aliases:
+  cert-arr39-c: bugprone-sizeof-expression
+  cert-con36-c: bugprone-spuriously-wake-up-functions
+  cert-con54-cpp: bugprone-spuriously-wake-up-functions
+  cert-ctr56-cpp: bugprone-pointer-arithmetic-on-polymorphic-object
+  cert-dcl03-c: misc-static-assert
+  cert-dcl16-c: readability-uppercase-literal-suffix
+  cert-dcl37-c: bugprone-reserved-identifier
+  cert-dcl50-cpp: modernize-avoid-variadic-functions
+  cert-dcl51-cpp: bugprone-reserved-identifier
+  cert-dcl54-cpp: misc-new-delete-overloads
+  cert-dcl58-cpp: bugprone-std-namespace-modification
+  cert-dcl59-cpp: misc-anonymous-namespace-in-header
+  cert-env33-c: bugprone-command-processor
+  cert-err09-cpp: misc-throw-by-value-catch-by-reference
+  cert-err33-c: bugprone-unused-return-value
+  cert-err34-c: bugprone-unchecked-string-to-number-conversion
+  cert-err52-cpp: modernize-avoid-setjmp-longjmp
+  cert-err58-cpp: bugprone-throwing-static-initialization
+  cert-err60-cpp: bugprone-exception-copy-constructor-throws
+  cert-err61-cpp: misc-throw-by-value-catch-by-reference
+  cert-exp42-c: bugprone-suspicious-memory-comparison
+  cert-exp45-c: bugprone-assignment-in-selection-statement
+  cert-fio38-c: misc-non-copyable-objects
+  cert-flp30-c: bugprone-float-loop-counter
+  cert-flp37-c: bugprone-suspicious-memory-comparison
+  cert-int09-c: readability-enum-initial-value
+  cert-mem57-cpp: bugprone-default-operator-new-on-overaligned-type
+  cert-msc24-c: bugprone-unsafe-functions
+  cert-msc30-c: misc-predictable-rand
+  cert-msc32-c: bugprone-random-generator-seed
+  cert-msc33-c: bugprone-unsafe-functions
+  cert-msc50-cpp: misc-predictable-rand
+  cert-msc51-cpp: bugprone-random-generator-seed
+  cert-msc54-cpp: bugprone-signal-handler
+  cert-oop11-cpp: performance-move-constructor-init
+  cert-oop54-cpp: bugprone-unhandled-self-assignment
+  cert-oop57-cpp: bugprone-raw-memory-call-on-non-trivial-type
+  cert-oop58-cpp: bugprone-copy-constructor-mutates-argument
+  cert-pos44-c: bugprone-bad-signal-to-kill-thread
+  cert-pos47-c: concurrency-thread-canceltype-asynchronous
+  cert-sig30-c: bugprone-signal-handler
+  cert-str34-c: bugprone-signed-char-misuse
+  cppcoreguidelines-avoid-c-arrays: modernize-avoid-c-arrays
+  cppcoreguidelines-avoid-magic-numbers: readability-magic-numbers
+  cppcoreguidelines-c-copy-assignment-signature: misc-unconventional-assign-operator
+  cppcoreguidelines-explicit-constructor: misc-explicit-constructor
+  cppcoreguidelines-explicit-virtual-functions: modernize-use-override
+  cppcoreguidelines-macro-to-enum: modernize-macro-to-enum
+  cppcoreguidelines-narrowing-conversions: bugprone-narrowing-conversions
+  cppcoreguidelines-noexcept-destructor: performance-noexcept-destructor
+  cppcoreguidelines-noexcept-move-operations: performance-noexcept-move-constructor
+  cppcoreguidelines-noexcept-swap: performance-noexcept-swap
+  cppcoreguidelines-non-private-member-variables-in-classes: misc-non-private-member-variables-in-classes
+  cppcoreguidelines-use-default-member-init: modernize-use-default-member-init
+  fuchsia-header-anon-namespaces: misc-anonymous-namespace-in-header
+  fuchsia-multiple-inheritance: misc-multiple-inheritance
+  google-build-namespaces: misc-anonymous-namespace-in-header
+  google-explicit-constructor: misc-explicit-constructor
+  google-readability-braces-around-statements: readability-braces-around-statements
+  google-readability-casting: modernize-avoid-c-style-cast
+  google-readability-function-size: readability-function-size
+  google-readability-namespace-comments: llvm-namespace-comment
+  llvm-else-after-return: readability-else-after-return
+  llvm-qualified-auto: readability-qualified-auto
+  performance-faster-string-find: performance-prefer-single-char-overloads
+
+# Primary checks an overlay deliberately does not run. Overlay keys are the
+# .clang-tidy-<key> suffixes.
+left_out:
+  android-cloexec-pipe:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Only remedy is pipe2() (not in the POSIX.1-2008 kit baseline); the
+      sanctioned pattern is fcntl(fd, F_SETFD, FD_CLOEXEC) immediately after
+      pipe().
+  bugprone-easily-swappable-parameters:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Reports every adjacent same-typed parameter pair (buffer and length, x and
+      y); the only fix is an API redesign, and suppressions are forbidden.
+  bugprone-exception-escape:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Reports any function that can transitively throw, including std::bad_alloc
+      from every allocation, with no fix short of a suppression.
+  bugprone-not-null-terminated-result:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Its fixes rewrite to the raw libc string calls the banned_libc_io job
+      forbids; the bounded string wrappers own termination.
+  bugprone-suspicious-include:
+    overlays: [c, shared-c-cxx]
+    why: >-
+      C and firmware test harnesses include .c sources to reach static
+      functions.
+  bugprone-unsafe-functions:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Runs in the unsafe overlays, which skip the project's wrapper files
+      (policy.unsafe_api.wrapper_files); in a main overlay it would also report
+      the wrappers themselves.
+  clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling:
+    overlays: [c]
+    why: >-
+      Runs in the unsafe-c overlay, which skips the project's wrapper files.
+  concurrency-mt-unsafe:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Flags every strerror/getenv/setenv call site with no allowlist and
+      suppressions are forbidden; on glibc >= 2.32 strerror is thread-safe, and
+      test mains legitimately use setenv. The real subset it would catch
+      (sigprocmask vs pthread_sigmask in threaded processes) is a code-review
+      item, not gateable. Same verdict for cppcheck's threadsafety addon.
+  cppcoreguidelines-avoid-goto:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      goto-based cleanup is the sanctioned single-exit error path in C and
+      C-compatible code.
+  cppcoreguidelines-avoid-non-const-global-variables:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Firmware state and signal flags live in file-scope static variables;
+      misc-use-internal-linkage keeps them internal.
+  cppcoreguidelines-init-variables:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Declare-then-fill out-parameters are standard C API usage; the analyzer's
+      uninitialized-read checks catch actual misuse.
+  cppcoreguidelines-macro-usage:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Shared C constants, include guards and configuration switches are macros;
+      the magic_literals job owns constant placement.
+  cppcoreguidelines-no-malloc:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Runs in the unsafe-cxx overlay, with the project's wrapper files skipped.
+  cppcoreguidelines-owning-memory:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Needs gsl::owner<> annotations; the kit uses no GSL and banned_cxx_heap
+      forbids new/delete.
+  cppcoreguidelines-pro-bounds-array-to-pointer-decay:
+    overlays: [c, shared-c-cxx]
+    why: &c_buffers >-
+      Array decay, pointer arithmetic and plain indexing are the C buffer model;
+      the pointer_bounds job and the analyzer's bounds checks own buffer safety.
+  cppcoreguidelines-pro-bounds-avoid-unchecked-container-access:
+    overlays: [c, shared-c-cxx]
+    why: *c_buffers
+  cppcoreguidelines-pro-bounds-constant-array-index:
+    overlays: [c, shared-c-cxx]
+    why: *c_buffers
+  cppcoreguidelines-pro-bounds-pointer-arithmetic:
+    overlays: [c, shared-c-cxx]
+    why: *c_buffers
+  cppcoreguidelines-pro-type-cstyle-cast:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      C has only C-style casts; in C++, modernize-avoid-c-style-cast (Google's
+      casting rule) is the cast check that runs.
+  cppcoreguidelines-pro-type-member-init:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      C-compatible structs are zero-initialized or filled by API calls;
+      clang-analyzer-optin.cplusplus.UninitializedObject covers C++ constructors.
+  cppcoreguidelines-pro-type-reinterpret-cast:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Wire-format and register access need reinterpret_cast; the pointer_bounds
+      job polices the buffers.
+  cppcoreguidelines-pro-type-union-access:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Tagged unions are the C-compatible variant type;
+      bugprone-tagged-union-member-count is on.
+  cppcoreguidelines-pro-type-vararg:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      printf-family formatting is allowed and checked by the compiler's
+      -Wformat=2 and -Werror=format-security.
+  cppcoreguidelines-use-enum-class:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Enums cross the C ABI in shared headers, which needs plain enums.
+  google-build-explicit-make-pair:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Guards a C++03 idiom (explicit make_pair template arguments) that class
+      template argument deduction has replaced.
+  google-objc-avoid-nsobject-new:
+    overlays: [c, cxx, shared-c-cxx]
+    why: &objc Objective-C only.
+  google-objc-avoid-throwing-exception:
+    overlays: [c, cxx, shared-c-cxx]
+    why: *objc
+  google-objc-function-naming:
+    overlays: [c, cxx, shared-c-cxx]
+    why: *objc
+  google-objc-global-variable-declaration:
+    overlays: [c, cxx, shared-c-cxx]
+    why: *objc
+  google-readability-avoid-underscore-in-googletest-name:
+    overlays: [c, cxx, shared-c-cxx]
+    why: &gtest googletest-specific; the kit does not prescribe a test framework.
+  google-runtime-float:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Google's long double ban; the kit sets no floating-point type policy.
+  google-runtime-int:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Flags long and short, which POSIX and libc signatures (strtol, ftell)
+      require.
+  google-upgrade-googletest-case:
+    overlays: [c, cxx, shared-c-cxx]
+    why: *gtest
+  llvm-namespace-comment:
+    overlays: [c]
+    why: C has no namespaces.
+  misc-header-include-cycle:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Diagnoses cycles inside vendored toolchain cores (e.g. Arduino Arduino.h
+      <-> Serial.h); the diagnostic escapes HeaderFilterRegex because its note
+      chain anchors in a project include, and it cannot be waived per site.
+  misc-include-cleaner:
+    overlays: [c, cxx, shared-c-cxx]
+    why: Needs full IWYU-style header maps; noise on umbrella headers.
+  misc-no-recursion:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Recursion policy is owned by the magic_literals job, which allows
+      explicitly annotated bounded recursion ({PREFIX}_BOUNDED_RECURSION plus a
+      depth cap); the tidy check cannot express that exception.
+  misc-use-anonymous-namespace:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Google style allows either static or an unnamed namespace for internal
+      linkage, and misc-use-internal-linkage (kept on) fixes by adding static --
+      enabling both makes the fix of one the violation of the other.
+  modernize-avoid-c-arrays:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Fixed-size C arrays are the stack/static buffer model (heap is forbidden)
+      and the C-compatible ABI.
+  modernize-avoid-c-style-cast:
+    overlays: [c]
+    why: C has only C-style casts.
+  modernize-deprecated-headers:
+    overlays: [c, shared-c-cxx]
+    why: C and C-compatible code includes <stdio.h>, not <cstdio>.
+  modernize-macro-to-enum:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Shared constants stay #define so the preprocessor and the
+      spec_traceability job can read them.
+  modernize-redundant-void-arg:
+    overlays: [c, shared-c-cxx]
+    why: C-compatible prototypes need (void) (-Wstrict-prototypes).
+  modernize-use-nullptr:
+    overlays: [c]
+    why: >-
+      C uses the project NULL macro (null_nodiscard job); nullptr is C23-only.
+  modernize-use-std-print:
+    overlays: [c, cxx, shared-c-cxx]
+    why: Needs C++23 <print>.
+  modernize-use-trailing-return-type:
+    overlays: [c, cxx, shared-c-cxx]
+    why: Google style uses leading return types.
+  modernize-use-using:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      typedef is the form C-compatible headers need; one alias form across the
+      C/C++ boundary.
+  performance-enum-size:
+    overlays: [c, cxx, shared-c-cxx]
+    why: Enum sizes are part of C ABIs and wire formats.
+  portability-avoid-pragma-once:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      The kit standardizes on #pragma once (the duplicate_includes job checks
+      its placement).
+  portability-no-assembler:
+    overlays: [c, shared-c-cxx]
+    why: >-
+      Firmware needs inline assembly for barriers and core instructions (wfi,
+      cpsid); with no waivers the check would ban them outright.
+  readability-function-cognitive-complexity:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      readability-function-size bounds functions; cognitive complexity flags flat
+      protocol state-machine switches.
+  readability-identifier-length:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Conventional short names (i, n, fd) are fine;
+      readability-identifier-naming owns naming.
+  readability-implicit-bool-conversion:
+    overlays: [c]
+    why: >-
+      Conditions on pointers and int status codes (if (ptr)) are idiomatic C.
+  readability-simplify-boolean-expr:
+    overlays: [c]
+    why: >-
+      Its rewrites collapse the explicit guard-clause returns the
+      guard_clause_style job requires.
+  readability-uppercase-literal-suffix:
+    overlays: [c, cxx, shared-c-cxx]
+    why: Suffix case is not part of the kit's style (Google allows u).
+  readability-use-concise-preprocessor-directives:
+    overlays: [c, cxx, shared-c-cxx]
+    why: >-
+      Rewrites #if defined(X) to #ifdef X, which has to be reverted as soon as a
+      second condition joins.

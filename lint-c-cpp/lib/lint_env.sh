@@ -30,5 +30,7 @@ _lint_env_init() {
   pythonpath="${pythonpath}:${LINT_KIT}/lib/core/scan"
   pythonpath="${pythonpath}:${LINT_KIT}/lib/core/tools"
   pythonpath="${pythonpath}:${LINT_KIT}/lib/core/workflow"
+  pythonpath="${pythonpath}:${LINT_KIT}/lib/helpers/compile_db"
+  pythonpath="${pythonpath}:${LINT_KIT}/lib/helpers/policy"
   export PYTHONPATH="${pythonpath}${PYTHONPATH:+:${PYTHONPATH}}"
 }

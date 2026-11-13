@@ -28,19 +28,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_LINT_LIB = Path(__file__).resolve().parents[2]
-if str(_LINT_LIB) not in sys.path:
-    sys.path.insert(0, str(_LINT_LIB))
-from lint_pythonpath import bootstrap as _bootstrap_lint_pythonpath  # noqa: E402
-
-_bootstrap_lint_pythonpath()
+from consumer_manifest import KNOWN_LINT_JOBS, load
 
 try:
     import yaml
 except ImportError:
     yaml = None
 
-from consumer_manifest import KNOWN_LINT_JOBS, load  # noqa: E402
+_LINT_LIB = Path(__file__).resolve().parents[2]
 
 ALLOWED_TOP_LEVEL_KEYS = frozenset(
     {
@@ -88,7 +83,6 @@ ALLOWED_COMPILE_DB_USERSPACE_ENTRY_KEYS = frozenset(
 
 ALLOWED_POLICY_KEYS = frozenset(
     {
-        "nolint_allowed",
         "overrides",
         "resource_lifetime",
         "shared_c_cxx_source_roots",
@@ -101,6 +95,7 @@ REMOVED_POLICY_KEYS = frozenset(
         "bounds",
         "firmware_lint_exemptions",
         "headers",
+        "nolint_allowed",
     }
 )
 # Non-null required under policy.
@@ -108,7 +103,7 @@ REQUIRED_NONEMPTY_POLICY = frozenset({"constants_headers", "overrides", "unsafe_
 ALLOWED_RESOURCE_LIFETIME_KEYS = frozenset({"pairs"})
 ALLOWED_WORKFLOW_KEYS = frozenset({"bare_vm_waivers"})
 ALLOWED_WAIVER_ENTRY_KEYS = frozenset({"job", "workflow"})
-ALLOWED_TOOLCHAIN_KEYS = frozenset({"lint_kit", "script"})
+ALLOWED_TOOLCHAIN_KEYS = frozenset({"lint_kit", "llvm_major", "script"})
 ALLOWED_LINT_KIT_KEYS = frozenset({"path", "ref", "repository"})
 ALLOWED_SPEC_TRACEABILITY_KEYS = frozenset({"manifest"})
 ALLOWED_YAMLLINT_KEYS = frozenset({"default", "files"})
@@ -160,7 +155,8 @@ def validate_allowed_policy_keys(policy: dict, manifest_path: Path) -> list[str]
     if removed:
         issues.append(
             f"{manifest_path}: removed policy fields: {', '.join(removed)} "
-            "(bounds/headers/firmware_lint_exemptions are kit-owned; rename C++ .h to .hpp)"
+            "(bounds/headers/firmware_lint_exemptions are kit-owned; rename C++ .h to .hpp; "
+            "nolint_allowed is gone: no suppression waivers, fix the finding)"
         )
     unknown = sorted(
         key for key in policy if key not in ALLOWED_POLICY_KEYS and key not in REMOVED_POLICY_KEYS
@@ -286,8 +282,14 @@ def validate_enabled_lint_jobs(data: dict, manifest_path: Path) -> list[str]:
             issues.append(f"{manifest_path}: enabled_lint_jobs: duplicate job {job!r}")
             continue
         seen.add(job)
-    # Consumers choose their own job set (no mandatory baseline) so the kit can
-    # serve projects of any size. Jobs still gate their own prerequisites below.
+    # Consumers choose their own job set so the kit can serve projects of any
+    # size; the suppression audit is the one exception (lint.sh runs it anyway).
+    if "nolint_audit" not in seen:
+        issues.append(
+            f"{manifest_path}: enabled_lint_jobs must list nolint_audit (the suppression "
+            "audit always runs and cannot be disabled)"
+        )
+    # Jobs still gate their own prerequisites below.
     for consumer in ("clang_tidy", "cppcheck", "openssf", "firmware_compile_db"):
         if consumer in seen and "compile_db" not in seen:
             issues.append(f"{manifest_path}: enabled_lint_jobs: {consumer} requires compile_db")
@@ -531,6 +533,14 @@ def validate_optional_top_level_sections(data: dict, manifest_path: Path) -> lis
                     f"{manifest_path}: toolchain.script must name an existing file inside the "
                     "repository"
                 )
+        llvm_major = toolchain.get("llvm_major")
+        if llvm_major is not None and (
+            not isinstance(llvm_major, int) or isinstance(llvm_major, bool) or llvm_major < 1
+        ):
+            issues.append(
+                f"{manifest_path}: toolchain.llvm_major must be a positive integer (LLVM major "
+                "required for lint) or null for the newest installed"
+            )
 
     spec_traceability = data.get("spec_traceability")
     issues.extend(
@@ -581,17 +591,6 @@ def validate_policy(data: dict, manifest_path: Path) -> list[str]:
         issues.append(
             f"{manifest_path}: policy.constants_headers entries must be non-empty strings"
         )
-
-    raw_nolint = policy.get("nolint_allowed")
-    if raw_nolint is not None:
-        if not isinstance(raw_nolint, list) or not raw_nolint:
-            issues.append(
-                f"{manifest_path}: policy.nolint_allowed must be a non-empty list or null"
-            )
-        elif not all(isinstance(item, str) and item.strip() for item in raw_nolint):
-            issues.append(
-                f"{manifest_path}: policy.nolint_allowed entries must be non-empty strings"
-            )
 
     shared_c_cxx = policy.get("shared_c_cxx_source_roots")
     if shared_c_cxx is not None and (

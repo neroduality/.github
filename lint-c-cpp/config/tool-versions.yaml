@@ -15,40 +15,44 @@
 # limitations under the License.
 
 # Minimum host lint tool versions for the org C/C++ lint kit.
+#
+# Every minimum is the lower of the versions on the two supported lint hosts:
+#   - the org CI lint container, debian:sid-slim@sha256:07a3205e8583fdff12d2b05bd030f50437e9fd340ee616df0c05dc77af75767b
+#     after the consumer install-linux-deps.sh with toolchain.llvm_major 23;
+#   - Fedora 45 distro packages (shfmt and markdownlint-cli from the same
+#     upstream release / npm installs as the container).
+# Bump the container (or the Fedora release) first, then re-derive these.
+#
+# LLVM tools resolve to the newest NAME-<major> (or bare NAME) on PATH at or
+# above min. A consumer pins one major with toolchain.llvm_major in its manifest.
+#
+# ruff and mypy are not container packages: lint runs exactly these versions
+# through uvx.
 
 tools:
   clang_format:
-    binaries:
-      - clang-format
-      - clang-format-20
-      - clang-format-21
-    min: "20.0.0"
+    min: "23.1.5"
   clang_tidy:
-    binaries:
-      - clang-tidy
-      - clang-tidy-21
-    min: "21.0.0"
+    min: "23.1.5"
   cmake:
-    min: "3.20"
+    min: "4.3.0"
   codespell:
     min: "2.4.2"
   cppcheck:
-    min: "2.19.1"
+    min: "2.22.0"
   markdownlint:
-    min: "0.48.0"
+    min: "0.50.0"
   make:
-    min: "4.0"
+    min: "4.4.1"
   mypy:
     min: "1.15.0"
   node:
-    min: 20
+    min: 22
   python3:
-    min: "3.10"
+    min: "3.14.10"
   ruff:
     min: "0.14.2"
   shellcheck:
-    min: "0.9.0"
-  # 3.7 and 3.14 format "((!" differently. Scripts use "((x == 0))" and lint
-  # rejects "((!" so either shfmt in this range leaves the tree unchanged.
+    min: "0.11.0"
   shfmt:
-    min: "3.0.0"
+    min: "3.14.1"

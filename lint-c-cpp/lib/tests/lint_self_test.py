@@ -30,11 +30,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tokenize
 import unittest
 from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
 from typing import ClassVar
+
+from consumer_manifest import (
+    KNOWN_LINT_JOBS_ORDERED,
+    enabled_lint_jobs_yaml_block,
+)
 
 TESTS_DIR = Path(__file__).resolve().parent
 LINT_LIB = TESTS_DIR.parent
@@ -207,8 +213,6 @@ scan:
 
 policy:
   constants_headers: [limits.h, board_config.h, config.h]
-  nolint_allowed:
-    - include/sample/sample_null.h
   overrides:
     clang-format: {add: null, remove: null, by_compile_db: null}
     clang-tidy-c: {add: null, remove: null, by_compile_db: null}
@@ -243,11 +247,6 @@ yamllint:
       schema: lint_config
       sort_by: key
 """
-
-from consumer_manifest import (  # noqa: E402
-    KNOWN_LINT_JOBS_ORDERED,
-    enabled_lint_jobs_yaml_block,
-)
 
 _ENABLED_LINT_JOBS_YAML = enabled_lint_jobs_yaml_block()
 _POLICY_TEST_MANIFEST = _POLICY_TEST_MANIFEST.rstrip() + "\n\n" + _ENABLED_LINT_JOBS_YAML
@@ -552,6 +551,20 @@ def assert_simulation_reported(
 def assert_section_order(testcase: unittest.TestCase, text: str, *sections: str) -> None:
     indices = [text.index(section) for section in sections]
     testcase.assertEqual(indices, sorted(indices), msg=sections)
+
+
+MAIN_CLANG_TIDY_OVERLAYS = ("c", "cxx", "shared-c-cxx")
+
+
+def clang_tidy_check_names(text: str) -> list[str]:
+    block = text.split("\nChecks: >\n", 1)[1].split("\n\n", 1)[0]
+    return [token.strip() for token in block.split(",") if token.strip()]
+
+
+def clang_tidy_coverage() -> dict:
+    import yaml
+
+    return yaml.safe_load((CONFIG_DIR / "clang-tidy-coverage.yaml").read_text(encoding="utf-8"))
 
 
 def bash_executable() -> str:
@@ -906,7 +919,8 @@ class LintStepCoverage(unittest.TestCase):
         checks = out.split("Checks:", 1)[1].split("WarningsAsErrors", 1)[0]
         self.assertNotIn("pure aliases", checks)
         self.assertNotIn("AllowedIdentifiers", checks)
-        self.assertIn("-cert-dcl37-c", checks)
+        self.assertIn("-*,", checks)
+        self.assertIn("readability-identifier-naming", checks)
         self.assertIn("-readability-magic-numbers", checks)
 
     def test_materialize_override_configs_null_copies_kit_configs(self) -> None:
@@ -990,7 +1004,7 @@ class LintStepCoverage(unittest.TestCase):
                 f"      compile_commands_json: {host_json}\n"
                 "      source: tests\n"
                 "policy:\n  constants_headers: [limits.h]\n"
-                "  nolint_allowed: null\n  resource_lifetime: null\n"
+                "  resource_lifetime: null\n"
                 "  shared_c_cxx_source_roots: [firmware]\n"
                 "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
@@ -1435,7 +1449,6 @@ class LintStepCoverage(unittest.TestCase):
                 "      compile_commands_json: build/lint/tests/compile_commands.json\n"
                 "      source: tests\n"
                 "policy:\n  constants_headers: [nero_nfc_limits.h]\n"
-                "  nolint_allowed: null\n"
                 "  resource_lifetime: null\n"
                 "  shared_c_cxx_source_roots: [firmware, tests/firmware]\n"
                 "  unsafe_api:\n    header: nero_nfc_null.h\n"
@@ -1738,7 +1751,7 @@ class LintStepCoverage(unittest.TestCase):
                 "      compile_commands_json: build/lint/tests/compile_commands.json\n"
                 "      source: tests\n"
                 "policy:\n  constants_headers: [limits.h]\n"
-                "  nolint_allowed: null\n  resource_lifetime: null\n"
+                "  resource_lifetime: null\n"
                 "  shared_c_cxx_source_roots: [firmware]\n"
                 "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
@@ -2204,7 +2217,7 @@ class LintStepCoverage(unittest.TestCase):
             "  source_roots: [core]\n"
             f"compile_db:\n  firmware: {firmware}\n  userspace: {userspace}\n"
             + enabled
-            + "policy:\n  constants_headers: [limits.h]\n  nolint_allowed: null\n"
+            + "policy:\n  constants_headers: [limits.h]\n"
             + _NULL_OVERRIDES_YAML
             + "  unsafe_api:\n    header: sample_null.h\n"
             "    include_headers: [attrs.h]\n"
@@ -3426,6 +3439,139 @@ class LintStepCoverage(unittest.TestCase):
             issues,
         )
 
+    def test_compile_db_audit_rejects_warning_silencing_options(self) -> None:
+        from hardening_verify import verify_compile_commands_openssf, warning_silencing_options
+
+        self.assertEqual(
+            warning_silencing_options(["-Wall", "-Wno-unused-parameter", "-w", "-Werror"]),
+            ["-Wno-unused-parameter", "-w"],
+        )
+        self.assertEqual(warning_silencing_options(["-fno-sanitize-recover=all", "-Wall"]), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_canonical_lint_manifest(root)
+            (root / "core").mkdir()
+            host = root / "core/host.c"
+            host.write_text("void host(void) {}\n", encoding="utf-8")
+            hardened = (
+                "-Wall -Wextra -Wformat -Wformat=2 -Wconversion -Wsign-conversion "
+                "-Wimplicit-fallthrough -Werror -Werror=format-security "
+                "-fno-delete-null-pointer-checks -fno-strict-overflow -fno-strict-aliasing "
+                "-fstack-protector-strong -fcf-protection=full -fexceptions"
+            )
+
+            def audit(extra: str) -> list[str]:
+                entries = {
+                    "core/host.c": {
+                        "directory": str(root),
+                        "command": f"/usr/bin/cc {hardened} {extra} -c {host.resolve()}",
+                        "file": str(host.resolve()),
+                    }
+                }
+                return verify_compile_commands_openssf(
+                    root, LINT_KIT, entries_by_key=entries, source_paths=[host]
+                )
+
+            self.assertEqual(audit(""), [])
+            issues = audit("-Wno-unused-parameter -Wp,-w")
+        self.assertIn(
+            "compile_commands warning audit: core/host.c: -Wno-unused-parameter -w switches "
+            "warnings off; fix the code instead",
+            issues,
+        )
+
+    def test_compile_db_audit_rejects_project_dirs_as_system_includes(self) -> None:
+        from hardening_verify import system_include_dirs, verify_compile_commands_openssf
+
+        tokens = ["-isystem", "/x", "-isystemrel", "-iprefix", "/p/", "-iwithprefix", "inc"]
+        tokens += [
+            "-iwithprefixbefore",
+            "user",
+            "-idirafter",
+            "d",
+            "-I",
+            "i",
+            "-isystem-after",
+            "a",
+        ]
+        self.assertEqual(
+            system_include_dirs(tokens, "/b"), ["/x", "/b/rel", "/p/inc", "/b/d", "/b/a"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_canonical_lint_manifest(root)
+            host = write(root / "core/host.c", "void host(void) {}\n")
+            header = write(root / "core/inc/host.h", "void host(void);\n")
+            hardened = (
+                "-Wall -Wextra -Wformat -Wformat=2 -Wconversion -Wsign-conversion "
+                "-Wimplicit-fallthrough -Werror -Werror=format-security "
+                "-fno-delete-null-pointer-checks -fno-strict-overflow -fno-strict-aliasing "
+                "-fstack-protector-strong -fcf-protection=full -fexceptions"
+            )
+
+            def audit(extra: str) -> list[str]:
+                entries = {
+                    "core/host.c": {
+                        "directory": str(root),
+                        "command": f"/usr/bin/cc {hardened} {extra} -c {host.resolve()}",
+                        "file": str(host.resolve()),
+                    }
+                }
+                return [
+                    issue
+                    for issue in verify_compile_commands_openssf(
+                        root, LINT_KIT, entries_by_key=entries, source_paths=[host, header]
+                    )
+                    if "warning audit" in issue
+                ]
+
+            self.assertEqual(audit("-I core/inc -isystem /usr/include -isystem vendor/x"), [])
+            for extra in ("-isystem core/inc", "-isystem/src/core/inc", "-idirafter core"):
+                with self.subTest(extra=extra):
+                    issues = audit(extra)
+                    self.assertTrue(issues)
+                    for issue in issues:
+                        self.assertIn("holds project sources and hides their warnings", issue)
+
+    def test_firmware_warning_audit_allows_only_the_sdk_own_flags(self) -> None:
+        from hardening_verify import firmware_sdk_silencing_baseline, warning_escape_issues
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_canonical_lint_manifest(root)
+            host = write(root / "core/host.c", "void host(void) {}\n")
+            database = root / "build/fw/compile_commands.json"
+            database.parent.mkdir(parents=True)
+            project = {
+                "directory": str(root),
+                "command": f"gcc -Wall -Wno-error -Wno-shadow -c {host}",
+                "file": str(host),
+            }
+            sdk = {
+                "directory": "/opt/sdk",
+                "command": "gcc -Wall -Wno-error -w -c cores/main.c",
+                "file": "cores/main.c",
+            }
+            database.write_text(json.dumps([project, sdk]), encoding="utf-8")
+            baseline = firmware_sdk_silencing_baseline(database, root)
+            self.assertEqual(baseline, frozenset({"-Wno-error", "-w"}))
+            issues = warning_escape_issues(
+                project,
+                "core/host.c",
+                repo_root=root,
+                project_keys={"core/host.c"},
+                allowed_silencers=baseline,
+                label_prefix="[build/fw/compile_commands.json] ",
+            )
+        self.assertEqual(
+            issues,
+            [
+                "compile_commands warning audit: [build/fw/compile_commands.json] core/host.c: "
+                "-Wno-shadow switches warnings off beyond the SDK's own flags; fix the code "
+                "instead"
+            ],
+        )
+
     def test_userspace_link_audit_checks_each_link_command(self) -> None:
         from hardening_verify import (
             _required_flag_names,
@@ -4333,20 +4479,18 @@ class LintStepCoverage(unittest.TestCase):
                 "fi\n"
                 "exit 0\n",
             )
-            make_fake_executable(fakebin, "scan-build-21", "#!/usr/bin/env bash\nexit 0\n")
+            make_fake_executable(fakebin, "scan-build-999", "#!/usr/bin/env bash\nexit 0\n")
             env = {**os.environ, "PATH": f"{fakebin}:{os.environ['PATH']}"}
+            env.pop("LINT_KIT_LLVM_MAJOR", None)
             script = (
                 f"source {str(TOOLCHAIN_DIR / 'clang_toolchain.sh')!r}; "
-                "tidy=$(lint_kit_find_clang_tidy); [[ $tidy == */clang-tidy ]]; "
-                'runner=$(lint_kit_find_run_clang_tidy "$tidy"); [[ $runner == */run-clang-tidy '
-                "]]; "
+                f"tidy=$(lint_kit_find_clang_tidy); [[ $tidy == {str(fakebin)!r}/clang-tidy ]]; "
+                'runner=$(lint_kit_find_run_clang_tidy "$tidy"); '
+                f"[[ $runner == {str(fakebin)!r}/run-clang-tidy ]]; "
                 "fmt=$(lint_kit_find_clang_format); [[ $fmt == */clang-format ]]; "
-                "scan=$(lint_kit_find_scan_build); [[ $scan == */scan-build-21 ]]; "
-                'lint_kit_clang_tidy_version_ge 21.0.0 "$(lint_kit_clang_tidy_version_raw '
-                '"$tidy")"; '
-                'lint_kit_clang_format_version_ge 20.0.0 "$(lint_kit_clang_format_version_raw '
-                '"$fmt")"; '
-                'lint_kit_scan_build_version_ge 21.0.0 "$(lint_kit_scan_build_version_raw "$scan")"'
+                "scan=$(lint_kit_find_scan_build); [[ $scan == */scan-build-999 ]]; "
+                "LINT_KIT_LLVM_MAJOR=99; [[ $(lint_kit_find_clang_tidy) == $tidy ]]; "
+                "LINT_KIT_LLVM_MAJOR=98; if lint_kit_find_clang_tidy; then exit 9; fi"
             )
             run_checked(["bash", "-c", script], env=env)
 
@@ -4357,9 +4501,9 @@ class LintStepCoverage(unittest.TestCase):
             fakebin.mkdir()
             make_fake_executable(
                 fakebin,
-                "clang-format-21",
+                "clang-format-99",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 21.0.0'; exit 0; "
+                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 99.0.0'; exit 0; "
                 "fi\n"
                 "exit 0\n",
             )
@@ -4394,7 +4538,7 @@ class LintStepCoverage(unittest.TestCase):
         self.assertNotIn('"$clang_tidy_bin" --quiet', ci_text)
         self.assertIn("lint_kit_clang_format_fail_on_change", ci_text)
         self.assertIn("lint_kit_shfmt_fail_on_change", ci_text)
-        self.assertIn("shellcheck -S warning", ci_text)
+        self.assertIn("shellcheck --norc -S warning", ci_text)
         self.assertIn(
             "format_toolchain.sh",
             (TOOLCHAIN_DIR / "clang_toolchain.sh").read_text(encoding="utf-8"),
@@ -4420,7 +4564,7 @@ class LintStepCoverage(unittest.TestCase):
             ci_text,
             format_section,
             "lint_kit_format_toolchain_self_test",
-            "shellcheck -S warning",
+            "shellcheck --norc -S warning",
             'run bash "${toolchain}/codespell.sh"',
             'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF '
             'audit)"',
@@ -4472,9 +4616,9 @@ class LintStepCoverage(unittest.TestCase):
             fakebin.mkdir()
             make_fake_executable(
                 fakebin,
-                "clang-format-21",
+                "clang-format-99",
                 "#!/usr/bin/env bash\n"
-                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 21.0.0'; exit 0; "
+                "if [[ ${1:-} == '--version' ]]; then echo 'clang-format version 99.0.0'; exit 0; "
                 "fi\n"
                 "if [[ ${1:-} == '-i' ]]; then\n"
                 "  shift\n"
@@ -4569,7 +4713,7 @@ class LintStepCoverage(unittest.TestCase):
             script,
             format_section,
             "lint_kit_format_toolchain_self_test",
-            "shellcheck -S warning",
+            "shellcheck --norc -S warning",
             'run bash "${toolchain}/codespell.sh"',
             "if ((custom_lints_only == 0)); then",
             'section compile_db "Generate compile databases (host configure -> merge -> OpenSSF '
@@ -4720,8 +4864,8 @@ class LintStepCoverage(unittest.TestCase):
             self.assertIn("misc-misleading-bidirectional", text)
             self.assertIn("readability-identifier-naming", text)
             self.assertRegex(text, r'(?m)^WarningsAsErrors:\s*[\'"]?\*[\'"]?\s*$')
-            self.assertNotIn("-readability-magic-numbers,", text)
-            self.assertNotIn("-cppcoreguidelines-avoid-magic-numbers,", text)
+            self.assertIn("readability-magic-numbers", clang_tidy_check_names(text))
+            self.assertNotIn("cppcoreguidelines-avoid-magic-numbers", text)
             self.assertIn("readability-magic-numbers.IgnoredIntegerValues", text)
             self.assertNotRegex(
                 text, r"(?m)^\s*- key: readability-identifier-naming\.MacroDefinitionIgnoredRegexp"
@@ -4733,9 +4877,9 @@ class LintStepCoverage(unittest.TestCase):
             "modernize-redundant-void-arg",
             "modernize-deprecated-headers",
         ):
-            self.assertIn(f"-{check},", c_text)
-            self.assertIn(f"-{check},", shared_text)
-            self.assertNotIn(f"-{check},", cxx_text)
+            self.assertNotIn(check, clang_tidy_check_names(c_text))
+            self.assertNotIn(check, clang_tidy_check_names(shared_text))
+            self.assertIn(check, clang_tidy_check_names(cxx_text))
         self.assertIn("FunctionCase\n    value: lower_case", c_text)
         self.assertIn("TypedefCase\n    value: lower_case", c_text)
         self.assertIn("TypedefSuffix\n    value: '_t'", c_text)
@@ -4765,14 +4909,16 @@ class LintStepCoverage(unittest.TestCase):
             self.assertNotIn("aNy_CasE", text)
         self.assertIn("FunctionCase\n    value: CamelCase", shared_text)
         for text in (c_text, cxx_text, shared_text):
-            self.assertIn("-bugprone-unsafe-functions,", text)
+            self.assertNotIn("bugprone-unsafe-functions", clang_tidy_check_names(text))
         unsafe_c = (CONFIG_DIR / ".clang-tidy-unsafe-c").read_text(encoding="utf-8")
         unsafe_cxx = (CONFIG_DIR / ".clang-tidy-unsafe-cxx").read_text(encoding="utf-8")
         for text in (unsafe_c, unsafe_cxx):
             self.assertIn("bugprone-unsafe-functions", text)
             self.assertIn("bugprone-unsafe-functions.CustomFunctions", text)
             self.assertIn("^malloc$", text)
-            self.assertIn("cert-err33-c", text)
+            self.assertIn("bugprone-unused-return-value", clang_tidy_check_names(text))
+            self.assertIn("bugprone-unused-return-value.CheckedFunctions", text)
+            self.assertIn("^::fclose$", text)
             self.assertIn("clang-analyzer-security.insecureAPI.UncheckedReturn", text)
             self.assertIn("clang-analyzer-security.insecureAPI.strcpy", text)
             self.assertIn("clang-analyzer-security.insecureAPI.vfork", text)
@@ -4781,8 +4927,9 @@ class LintStepCoverage(unittest.TestCase):
                 text,
             )
             self.assertNotIn("clang-analyzer-security.insecureAPI.*", text)
-            checks_block = text.split("Checks:", 1)[1].split("\n\n", 1)[0]
-            self.assertNotRegex(checks_block, r"(?m)^\s+-")
+            names = clang_tidy_check_names(text)
+            self.assertEqual(names[0], "-*")
+            self.assertFalse([name for name in names[1:] if name.startswith("-")])
             self.assertRegex(text, r'(?m)^WarningsAsErrors:\s*[\'"]?\*[\'"]?\s*$')
             self.assertIn("ReportDefaultFunctions", text)
             self.assertIn("ReportMoreUnsafeFunctions", text)
@@ -4790,6 +4937,186 @@ class LintStepCoverage(unittest.TestCase):
         self.assertIn("cppcoreguidelines-no-malloc", unsafe_cxx)
         self.assertIn("cppcoreguidelines-no-malloc.Allocations", unsafe_cxx)
         self.assertNotIn("cppcoreguidelines-no-malloc", unsafe_c)
+
+    def test_clang_tidy_overlays_name_every_check(self) -> None:
+        # A family wildcard lets a newer clang-tidy enable (or rename) checks on its own.
+        for overlay in sorted(CONFIG_DIR.glob(".clang-tidy-*")):
+            names = clang_tidy_check_names(overlay.read_text(encoding="utf-8"))
+            self.assertEqual(names[0], "-*", msg=overlay.name)
+            wildcards = [name for name in names[1:] if "*" in name and name != "clang-diagnostic-*"]
+            self.assertFalse(wildcards, msg=f"{overlay.name}: {wildcards}")
+            self.assertEqual(len(names), len(set(names)), msg=f"{overlay.name}: duplicate checks")
+
+    def test_clang_tidy_overlays_name_primaries_and_configure_only_listed_checks(self) -> None:
+        coverage = clang_tidy_coverage()
+        aliases = coverage["aliases"]
+        left_out = coverage["left_out"]
+        self.assertFalse(sorted(set(left_out) & set(aliases)), msg="left_out names an alias")
+        for check, entry in left_out.items():
+            self.assertTrue(str(entry.get("why", "")).strip(), msg=f"{check}: no reason")
+            self.assertTrue(entry["overlays"], msg=check)
+            self.assertFalse(set(entry["overlays"]) - set(MAIN_CLANG_TIDY_OVERLAYS), msg=check)
+        for overlay in sorted(CONFIG_DIR.glob(".clang-tidy-*")):
+            text = overlay.read_text(encoding="utf-8")
+            names = set(clang_tidy_check_names(text))
+            self.assertFalse(sorted(names & set(aliases)), msg=f"{overlay.name}: alias names")
+            key = overlay.name.removeprefix(".clang-tidy-")
+            if key in MAIN_CLANG_TIDY_OVERLAYS:
+                both = sorted(c for c, e in left_out.items() if key in e["overlays"] and c in names)
+                self.assertFalse(both, msg=f"{overlay.name}: listed and left out")
+            # An option for a check the overlay does not run is dead (or an alias's).
+            stale = sorted(
+                option
+                for option in re.findall(r"(?m)^\s+- key: (\S+)", text)
+                if option.split(".", 1)[0] not in names
+            )
+            self.assertFalse(stale, msg=f"{overlay.name}: options for unlisted checks")
+
+    def test_clang_tidy_overlays_decide_every_family_check(self) -> None:
+        tidy = self._kit_clang_tidy()
+        coverage = clang_tidy_coverage()
+        aliases = coverage["aliases"]
+        result = run_checked([tidy, "-checks=*", "--list-checks", "/dev/null", "--", "-xc"])
+        available = {line.strip() for line in result.stdout.splitlines()[1:] if line.strip()}
+        self.assertFalse(sorted(set(aliases) - available), msg="aliases unknown to this clang-tidy")
+        self.assertFalse(
+            sorted(set(coverage["left_out"]) - available),
+            msg="left_out checks unknown to this clang-tidy",
+        )
+        family = {
+            check
+            for check in available
+            if any(check.startswith(f"{name}-") for name in coverage["families"])
+        }
+        for key in MAIN_CLANG_TIDY_OVERLAYS:
+            overlay = CONFIG_DIR / f".clang-tidy-{key}"
+            listed = set(clang_tidy_check_names(overlay.read_text(encoding="utf-8")))
+            decided = listed | {
+                check for check, entry in coverage["left_out"].items() if key in entry["overlays"]
+            }
+            undecided = sorted(c for c in family if aliases.get(c, c) not in decided)
+            self.assertFalse(
+                undecided,
+                msg=f"{overlay.name}: name these checks in Checks, or record them under "
+                "left_out (or aliases, for a new alias) in config/clang-tidy-coverage.yaml",
+            )
+
+    def test_clang_tidy_overlays_pass_verify_config(self) -> None:
+        tidy = self._kit_clang_tidy()
+        for overlay in sorted(CONFIG_DIR.glob(".clang-tidy-*")):
+            result = subprocess.run(
+                [tidy, "--verify-config", f"-config-file={overlay}"],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertIn(
+                "No config errors detected",
+                result.stdout + result.stderr,
+                msg=f"{overlay.name}: {result.stdout}{result.stderr}",
+            )
+
+    def _kit_clang_tidy(self) -> str:
+        found = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"source {str(TOOLCHAIN_DIR / 'clang_toolchain.sh')!r}; lint_kit_find_clang_tidy",
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        tidy = found.stdout.strip()
+        if found.returncode != 0 or not tidy:
+            if os.environ.get("LINT_KIT_SELF_TEST_ALLOW_NO_CLANG_TIDY") == "1":
+                self.skipTest("no clang-tidy at the kit minimum on PATH")
+            self.fail(
+                "no clang-tidy at the kit minimum on PATH: the overlay coverage tests need "
+                "it (set LINT_KIT_SELF_TEST_ALLOW_NO_CLANG_TIDY=1 to skip them locally)"
+            )
+        return tidy
+
+    def test_clang_tidy_overlays_enable_exactly_the_listed_checks(self) -> None:
+        tidy = self._kit_clang_tidy()
+
+        def enabled(*args: str) -> set[str]:
+            result = run_checked([tidy, *args, "--list-checks", "/dev/null", "--", "-xc"])
+            return {line.strip() for line in result.stdout.splitlines()[1:] if line.strip()}
+
+        # The analyzer always runs its core checkers once any analyzer check is on.
+        probe = "clang-analyzer-security.insecureAPI.gets"
+        analyzer_core = enabled(f"-checks=-*,{probe}") - {probe}
+        self.assertTrue(analyzer_core, msg="clang-tidy reported no analyzer core checkers")
+        for overlay in sorted(CONFIG_DIR.glob(".clang-tidy-*")):
+            listed = set(clang_tidy_check_names(overlay.read_text(encoding="utf-8")))
+            active = {
+                check
+                for check in enabled(f"-config-file={overlay}")
+                if not check.startswith("clang-diagnostic-")
+            }
+            self.assertEqual(listed - {"-*", "clang-diagnostic-*"} - active, set(), overlay.name)
+            self.assertEqual(active - listed - analyzer_core, set(), msg=overlay.name)
+            if listed & analyzer_core:
+                self.assertEqual(analyzer_core - listed, set(), msg=f"{overlay.name}: unlisted")
+
+    def test_clang_tidy_overlays_name_no_deprecated_checks_or_invalid_values(self) -> None:
+        # Deprecated names and invalid option values fail the run under --warnings-as-errors.
+        tidy = self._kit_clang_tidy()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = write(Path(tmp) / "empty.c", "int main(void) { return 0; }\n")
+            for overlay in sorted(CONFIG_DIR.glob(".clang-tidy-*")):
+                result = subprocess.run(
+                    [tidy, "--quiet", f"-config-file={overlay}", str(source), "--", "-std=c2x"],
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotIn("deprecated", output, msg=overlay.name)
+                self.assertNotIn("invalid configuration value", output, msg=overlay.name)
+
+    def test_manifest_toolchain_llvm_major_is_positive_int_or_null(self) -> None:
+        from manifest_validate import validate_optional_top_level_sections
+
+        path = Path("/nonexistent/.github/lint-c-cpp.yaml")
+
+        def issues(toolchain: dict) -> list[str]:
+            found = validate_optional_top_level_sections({"toolchain": toolchain}, path)
+            return [message for message in found if "llvm_major" in message]
+
+        base = {"lint_kit": None, "script": None}
+        self.assertEqual(issues({**base, "llvm_major": None}), [])
+        self.assertEqual(issues({**base, "llvm_major": 23}), [])
+        for bad in ("23", True, 0):
+            self.assertTrue(issues({**base, "llvm_major": bad}), msg=repr(bad))
+        self.assertTrue(issues(base), msg="llvm_major is required (null when unpinned)")
+
+    def test_lint_takes_llvm_major_from_manifest_only(self) -> None:
+        ci_text = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
+        self.assertNotIn("LINT_KIT_LLVM_MAJOR:-$(", ci_text)
+        self.assertIn("conflicts with toolchain.llvm_major", ci_text)
+        self.assertIn('LINT_KIT_LLVM_MAJOR="${manifest_llvm_major}"', ci_text)
+
+    def test_entry_point_runs_kit_python_helpers(self) -> None:
+        env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+        result = subprocess.run(
+            [
+                "bash",
+                str(LINT_KIT / "lint-c-cpp.sh"),
+                "python",
+                str(POLICY_DIR / "policy_runner.py"),
+                "--self-test",
+                "--script",
+                "nolint_audit.py",
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("nolint-audit self-test: OK", result.stdout)
 
     def test_compile_db_path_mapping_rebases_foreign_firmware_prefix(self) -> None:
         import compile_db_util
@@ -6478,8 +6805,13 @@ class PolicyLinterSimulations(unittest.TestCase):
             )
             write(
                 root / "include/sample/sample_null.h",
-                "// NOLINTNEXTLINE(ok-here)\n#pragma once\n",
+                "// NOLINTNEXTLINE(no-waivers)\n#pragma once\n",
             )
+            write(root / "scripts/bad.sh", "#!/usr/bin/env bash\n# shellcheck disable=SC2086\n")
+            write(root / "tools/bad.py", "import os  # noqa: F401\n")
+            write(root / "docs/bad.md", "<!-- markdownlint-disable -->\n# T\n")
+            write(root / ".shellcheckrc", "disable=all\n")
+            write(root / "core/bad_pragma.c", '#pragma GCC diagnostic ignored "-Wconversion"\n')
             findings = policy_lint("nolint_audit.py", root, "nolint")
         reported = reported_basenames(findings)
         assert_simulation_reported(
@@ -6491,8 +6823,80 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "bad_begin.c",
                 "bad_cppcheck.c",
                 "bad_cppcheck_begin.c",
+                "sample_null.h",
+                "bad.sh",
+                "bad.py",
+                "bad.md",
+                ".shellcheckrc",
+                "bad_pragma.c",
             ],
-            clean=["clean.c", "sample_null.h"],
+            clean=["clean.c"],
+        )
+
+    def test_nolint_audit_reports_warning_flag_without_trailing_punctuation(self) -> None:
+        audit = load_helper("policy/nolint_audit.py")
+        self.assertEqual(
+            audit.scan_text(Path("notes.txt"), "Never pass -Wno-unused.\n"),
+            [(1, "warning switched off by -Wno-unused")],
+        )
+        self.assertEqual(
+            audit.scan_text(Path("a.cmake"), "add_compile_options(-Wno-error=format,)\n"),
+            [(1, "warning switched off by -Wno-error=format")],
+        )
+
+    def test_kit_sources_carry_no_suppressions(self) -> None:
+        audit = load_helper("policy/nolint_audit.py")
+        kit_configs = {CONFIG_DIR / name for name in (".clang-format", ".markdownlint.yaml")}
+        kit_configs |= {CONFIG_DIR / "mypy.ini", CONFIG_DIR / "ruff.toml"}
+        fixture_holders = {Path(__file__).resolve(), POLICY_DIR / "nolint_audit.py"}
+        findings: list[str] = []
+        for path in sorted(LINT_KIT.rglob("*")):
+            if not path.is_file() or {"__pycache__", ".git"} & set(path.parts):
+                continue
+            if path in kit_configs:
+                continue
+            if path in fixture_holders:
+                # Suppression strings are fixtures here; only real comments count.
+                with path.open("rb") as handle:
+                    findings += [
+                        f"{path}:{tok.start[0]}: {tok.string}"
+                        for tok in tokenize.tokenize(handle.readline)
+                        if tok.type == tokenize.COMMENT and audit.scan_text(path, tok.string)
+                    ]
+                continue
+            file_findings = audit.scan_file(path)
+            if path.suffix == ".py":
+                # Kit Python handles compiler flags as data (strip lists, audit patterns).
+                file_findings = [
+                    item for item in file_findings if "warning switched off" not in item
+                ]
+            findings += file_findings
+        self.assertEqual(findings, [])
+
+    def test_suppressions_have_no_waiver_or_off_switch(self) -> None:
+        import manifest_validate
+
+        self.assertIn("nolint_allowed", manifest_validate.REMOVED_POLICY_KEYS)
+        self.assertNotIn("nolint_allowed", manifest_validate.ALLOWED_POLICY_KEYS)
+        path = Path("/nonexistent/.github/lint-c-cpp.yaml")
+        without = manifest_validate.validate_enabled_lint_jobs(
+            {"enabled_lint_jobs": ["format"]}, path
+        )
+        self.assertTrue(any("must list nolint_audit" in issue for issue in without), without)
+        self.assertEqual(
+            manifest_validate.validate_enabled_lint_jobs(
+                {"enabled_lint_jobs": ["format", "nolint_audit"]}, path
+            ),
+            [],
+        )
+        ci_text = (COMMANDS_DIR / "lint.sh").read_text(encoding="utf-8")
+        self.assertNotIn("lint_job_enabled nolint_audit", ci_text)
+        self.assertIn("run_python_policy_linter policy/nolint_audit.py", ci_text)
+        self.assertIn("shellcheck --norc", ci_text)
+        self.assertIn("env -u SHELLCHECK_OPTS", ci_text)
+        python_lint = (TOOLCHAIN_DIR / "python_lint.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'check --ignore-noqa \\\n    --config "${LINT_KIT_PYTHON_CONFIG_DIR}', python_lint
         )
 
     def test_resource_lifetime_flags_split_manual_pairs_and_allows_canonical_wrappers(self) -> None:
@@ -6937,7 +7341,7 @@ class PolicyLinterSimulations(unittest.TestCase):
                 "    - compile_commands_json: build/lint/userspace/compile_commands.json\n"
                 "      source: userspace\n"
                 "policy:\n  constants_headers: [limits.h]\n"
-                "  nolint_allowed: null\n  resource_lifetime: null\n"
+                "  resource_lifetime: null\n"
                 "  shared_c_cxx_source_roots: null\n"
                 "  unsafe_api:\n    header: sample_null.h\n"
                 "    include_headers: [attrs.h]\n"
